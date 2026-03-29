@@ -1,283 +1,170 @@
-# VibeMouse
+# VibeMouse for Windows
 
-Mouse-side-button voice input for VibeCoding.
+鼠标侧键语音输入工具 — 按一下鼠标，说话即输入。
 
-中文文档：[`README.zh-CN.md`](./README.zh-CN.md)
+基于 [VibeMouse](https://github.com/vimalinx/VibeMouse) 改造，移除 OpenClaw/Hyprland 依赖，适配 Windows。
 
-AI adaptation guides:
-- English: [`docs/AI_ASSISTANT_DEPLOYMENT.md`](./docs/AI_ASSISTANT_DEPLOYMENT.md)
-- 中文：[`docs/AI_ASSISTANT_DEPLOYMENT.zh-CN.md`](./docs/AI_ASSISTANT_DEPLOYMENT.zh-CN.md)
-- AI debug runbook: [`docs/AI_DEBUG_RUNBOOK.md`](./docs/AI_DEBUG_RUNBOOK.md)
+## 功能
 
-## What This Project Does
+- **按鼠标前侧键**开始录音，再按一次停止 → 语音自动转文字并粘贴到光标处
+- **按鼠标后侧键**发送 Enter
+- **5 种语言自动识别**：中文、English、粤语、日本語、한국어，无需手动切换
+- **完全离线**：语音识别模型（SenseVoice）在本地运行，不需要网络，隐私安全
+- 任何能输入文字的地方都能用 — 记事本、浏览器、微信、IDE、终端等
 
-VibeMouse binds your coding speech workflow to mouse side buttons:
-- Front side button: start/stop recording
-- Rear side button while idle: send Enter
-- Rear side button while recording: stop recording and route transcript to OpenClaw
+## 安装
 
-Core goals are low friction, stable daily use, and graceful fallback when any subsystem fails.
+### 1. 环境要求
 
-## Runtime Architecture (Core)
+- Windows 10/11
+- Python 3.10+（推荐 [Miniconda](https://docs.conda.io/en/latest/miniconda.html)）
+- 带侧键的鼠标
 
-The runtime is event-driven and split by responsibility:
-
-1. `vibemouse/main.py`
-   - CLI entry (`run` / `doctor`)
-2. `vibemouse/app.py`
-   - Orchestrates button events, recording state, transcription workers, and final output routing
-3. `vibemouse/mouse_listener.py`
-   - Captures side buttons and gestures (`evdev` first, fallback path available)
-4. `vibemouse/audio.py`
-   - Records audio to temp WAV
-5. `vibemouse/transcriber.py`
-   - SenseVoice backend selection and transcription
-6. `vibemouse/output.py`
-   - Text typing / clipboard / OpenClaw dispatch, with fallback and reason tracking
-7. `vibemouse/system_integration.py`
-   - Platform adapter boundary (Hyprland now, Windows/macOS extension points prepared)
-8. `vibemouse/doctor.py`
-   - Built-in diagnostics for env, OpenClaw, input permissions, and known conflicts
-
-## Quick Start (Linux)
-
-### Ubuntu / Debian packages
+### 2. 克隆项目
 
 ```bash
-sudo apt update
-sudo apt install -y python3-gi gir1.2-atspi-2.0 portaudio19-dev libsndfile1
+git clone https://github.com/gongyuhang2023-cpu/VibeMouse_for_Windows.git
+cd VibeMouse_for_Windows
 ```
 
-### Arch packages
+### 3. 安装依赖
 
 ```bash
-sudo pacman -Syu --needed python python-pip python-gobject portaudio libsndfile
+# 基础依赖
+pip install sounddevice soundfile pynput pyperclip jieba onnxruntime modelscope sentencepiece kaldi-native-fbank onnx
+
+# librosa 及其依赖
+pip install librosa lazy_loader pooch soxr audioread decorator joblib numba scikit-learn
+
+# funasr-onnx（跳过 numpy 版本约束）
+pip install funasr-onnx --no-deps
+
+# PyTorch（CPU 版本，约 115MB）
+pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+# 安装项目本体
+pip install -e . --no-deps
 ```
 
-### Install
+### 4. 下载语音识别模型（首次运行自动下载，约 230MB）
+
+首次启动会从 ModelScope 下载 SenseVoice 模型，需要网络连接。下载完成后即可离线使用。
+
+如果 tokenizer 文件缺失，手动补充：
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -U pip
-pip install -e .
+python -c "from modelscope import snapshot_download; snapshot_download('iic/SenseVoiceSmall', allow_patterns=['chn_jpn_yue_eng_ko_spectok.bpe.model'])"
 ```
 
-### Run
+然后将 `chn_jpn_yue_eng_ko_spectok.bpe.model` 复制到 ONNX 模型目录：
+
+```
+%USERPROFILE%\.cache\modelscope\hub\models\iic\SenseVoiceSmall-onnx\
+```
+
+### 5. 验证安装
 
 ```bash
-export VIBEMOUSE_BACKEND=funasr_onnx
-export VIBEMOUSE_DEVICE=cpu
-vibemouse
+python -m vibemouse.cli.main doctor
 ```
 
-Default install is ONNX-first for smaller deployment footprint.
+三项全部 `[OK]` 即可使用。
 
-- Optional PyTorch backend (GPU/advanced fallback): `pip install -e ".[pt]"`
-- Optional Intel NPU dependencies: `pip install -e ".[npu]"`
+## 使用
 
-### One-command auto deploy (recommended)
+### 启动
 
 ```bash
-bash scripts/auto-deploy.sh --preset stable
+# 方式一：命令行启动（可看日志）
+python -m vibemouse.cli.main run
+
+# 方式二：双击 start_vibemouse.bat（有窗口）
+
+# 方式三：双击 start_vibemouse_silent.vbs（无窗口后台运行）
 ```
 
-This command bootstraps `.venv`, installs VibeMouse, generates service/env files,
-enables `systemd --user` service, and runs `vibemouse doctor`.
+### 操作
 
-Available presets:
-- `stable`: balanced daily-driver defaults
-- `fast`: lower debounce + higher OpenClaw retries
-- `low-resource`: lower background footprint defaults
+| 操作 | 效果 |
+|------|------|
+| 按**前侧键** | 开始录音（再按一次停止，自动识别并粘贴） |
+| 按**后侧键** | 发送 Enter |
+| 右键 | 正常使用，不受影响 |
 
-Examples:
+### 关闭
+
+后台运行时，打开任务管理器，结束 `python.exe` 进程即可。
+
+## 开机自启
+
+将 `start_vibemouse_silent.vbs` 复制到 Windows 启动文件夹：
+
+```
+%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\
+```
+
+或按 `Win+R`，输入 `shell:startup`，将 `start_vibemouse_silent.vbs` 粘贴进去。
+
+下次开机后 VibeMouse 会自动在后台运行，桌面不会弹出窗口。
+
+取消自启：从启动文件夹删除该文件即可。
+
+## 按键映射
+
+默认配置 `front=x2, rear=x1`。如果你的鼠标侧键映射不同，可以用测试脚本确认：
 
 ```bash
-# High reliability profile
-bash scripts/auto-deploy.sh --preset stable
-
-# Keep resources low
-bash scripts/auto-deploy.sh --preset low-resource
-
-# Custom OpenClaw target assistant
-bash scripts/auto-deploy.sh --preset stable --openclaw-agent ops
+python test_buttons.py
 ```
 
-## Default Mapping and State Logic
+如需交换，修改 `vibemouse/config/schema.py` 中 `build_default_config_document()` 的 `front_button` 和 `rear_button` 值。
 
-- `VIBEMOUSE_FRONT_BUTTON` default: `x1`
-- `VIBEMOUSE_REAR_BUTTON` default: `x2`
+## 配置
 
-State matrix:
-- Idle + rear press -> Enter (`VIBEMOUSE_ENTER_MODE`)
-- Recording + rear press -> stop recording + OpenClaw dispatch
+配置文件路径：`%APPDATA%\vibemouse\config.json`
 
-If your hardware labels are reversed:
+也可通过环境变量覆盖：
 
-```bash
-export VIBEMOUSE_FRONT_BUTTON=x2
-export VIBEMOUSE_REAR_BUTTON=x1
-```
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `VIBEMOUSE_LANGUAGE` | `auto` | 识别语言（`auto`/`zh`/`en`/`yue`/`ja`/`ko`） |
+| `VIBEMOUSE_DEVICE` | `cpu` | 推理设备（`cpu` 或 `cuda:0`） |
+| `VIBEMOUSE_ENTER_MODE` | `enter` | 后侧键模式（`enter`/`ctrl_enter`/`shift_enter`/`none`） |
+| `VIBEMOUSE_AUTO_PASTE` | `true` | 识别后自动粘贴 |
+| `VIBEMOUSE_PREWARM_ON_START` | `true` | 启动时预加载模型（减少首次识别延迟） |
+| `VIBEMOUSE_FRONT_BUTTON` | `x2` | 前侧键映射 |
+| `VIBEMOUSE_REAR_BUTTON` | `x1` | 后侧键映射 |
 
-## OpenClaw Integration (Core)
+## 资源占用
 
-OpenClaw route is explicit and configurable:
-- `VIBEMOUSE_OPENCLAW_COMMAND` (default `openclaw`)
-- `VIBEMOUSE_OPENCLAW_AGENT` (default `main`)
-- `VIBEMOUSE_OPENCLAW_TIMEOUT_S` (default `20.0`)
-- `VIBEMOUSE_OPENCLAW_RETRIES` (default `0`)
+- 内存：约 **660 MB**（主要是 SenseVoice 模型常驻）
+- CPU：空闲时几乎为零，仅在语音识别时短暂占用
+- 磁盘：模型约 230MB
 
-Dispatch behavior:
-- Fast fire-and-forget spawn to avoid blocking UI interaction
-- Route result includes reason (`dispatched`, `dispatched_after_retry_*`, `spawn_error:*`, etc.)
-- Clipboard fallback if command is invalid or spawn fails
+## 常见问题
 
-Deployment tip: if you run your own local assistant setup, set
-`VIBEMOUSE_OPENCLAW_AGENT` to your own assistant ID.
+### 按侧键没反应
 
-## Built-in Doctor
+运行 `python test_mouse.py` 确认 pynput 能检测到侧键事件。如果检测不到，可能需要以管理员权限运行。
 
-Run diagnostics:
+### 前后键功能反了
 
-```bash
-vibemouse doctor
-```
+运行 `python test_buttons.py`，按提示操作，确认哪个物理键是 x1、哪个是 x2，然后修改配置。
 
-Apply safe auto-fixes first, then re-check:
+### 识别结果没有粘贴到目标窗口
 
-```bash
-vibemouse doctor --fix
-```
+确保目标窗口的输入框获得了焦点（光标在输入框里闪烁）。VibeMouse 通过剪贴板 + Ctrl+V 粘贴文本。
 
-Current checks include:
-- Config load validity
-- OpenClaw command resolution + agent existence
-- Microphone input availability
-- Linux input device permissions / side-button capability
-- Hyprland rear-button Return bind conflicts
-- `systemctl --user` service activity
+### 内存占用过高
 
-Current auto-fixes (`--fix`) include:
-- Auto-disable conflicting Hyprland side-button Return binds
-- Attempt to restart inactive `vibemouse.service`
+660MB 是正常值（模型常驻）。如果不可接受，关闭预热：设置 `VIBEMOUSE_PREWARM_ON_START=false`，模型会在首次录音时才加载。
 
-Exit code is non-zero when any `FAIL` check exists.
+## 致谢
 
-## Deploy Command
-
-The deploy command is scriptable and can be used directly:
-
-```bash
-vibemouse deploy --preset stable
-```
-
-Useful flags:
-- `--preset stable|fast|low-resource`
-- `--openclaw-command "openclaw --profile prod"`
-- `--openclaw-agent main`
-- `--openclaw-retries 2`
-- `--log-file ~/.local/state/vibemouse/service.log`
-- `--skip-systemctl`
-- `--dry-run`
-
-Persistent debug logs (recommended):
-
-```bash
-tail -f ~/.local/state/vibemouse/service.log
-```
-
-## Frequently Used Variables
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `VIBEMOUSE_ENTER_MODE` | `enter` | Rear-button submit mode (`enter`, `ctrl_enter`, `shift_enter`, `none`) |
-| `VIBEMOUSE_AUTO_PASTE` | `false` | Auto paste when route falls back to clipboard |
-| `VIBEMOUSE_GESTURES_ENABLED` | `false` | Enable gesture recognition |
-| `VIBEMOUSE_GESTURE_TRIGGER_BUTTON` | `rear` | Gesture trigger (`front`, `rear`, `right`) |
-| `VIBEMOUSE_GESTURE_THRESHOLD_PX` | `120` | Gesture movement threshold |
-| `VIBEMOUSE_GESTURE_FREEZE_POINTER` | `true` | Freeze pointer during gesture capture |
-| `VIBEMOUSE_PREWARM_ON_START` | `true` | Preload ASR on startup to reduce first-use latency |
-| `VIBEMOUSE_PREWARM_DELAY_S` | `0.0` | Delay ASR prewarm after startup to improve initial responsiveness |
-| `VIBEMOUSE_STATUS_FILE` | `$XDG_RUNTIME_DIR/vibemouse-status.json` | Runtime status for bars/widgets |
-
-Full configuration source of truth: `vibemouse/config.py`.
-
-## Troubleshooting Shortlist
-
-### Postmortem: "Everything stopped working" (record/gesture/enter)
-
-When users report that recording, right-button gestures, and Enter all fail together,
-the most common root cause is **mouse side-button event mismatch**, not a dead service.
-
-Typical failure pattern:
-- Service is `active`, but button actions never trigger.
-- Hyprland workspace commands still return `ok` when run manually.
-- User perception: "all features are broken".
-
-Real root causes we hit:
-1. Side-button codes were only matched as `BTN_SIDE`/`BTN_EXTRA`.
-2. Some mice emit `BTN_BACK`/`BTN_FORWARD` aliases instead.
-3. Runtime env had action mappings, but listener never recognized raw events.
-
-Current fix in code:
-- `x1` accepts `{BTN_SIDE, BTN_BACK}`
-- `x2` accepts `{BTN_EXTRA, BTN_FORWARD}`
-
-Fast verification order (recommended):
-1. `systemctl --user is-active vibemouse.service`
-2. `hyprctl dispatch workspace e-1` and `hyprctl dispatch workspace e+1`
-3. `vibemouse doctor`
-4. Confirm runtime env from `/proc/<MainPID>/environ`:
-   - `VIBEMOUSE_GESTURE_TRIGGER_BUTTON`
-   - `VIBEMOUSE_GESTURE_LEFT_ACTION`
-   - `VIBEMOUSE_GESTURE_RIGHT_ACTION`
-   - `VIBEMOUSE_FRONT_BUTTON` / `VIBEMOUSE_REAR_BUTTON`
-
-If (1)-(3) pass but buttons still do nothing, debug listener code-path first.
-
-### Rear button still sends Enter while recording
-
-Check Hyprland-level hard bind conflict in
-`~/.config/hypr/UserConfigs/UserKeybinds.conf` and remove lines like:
-
-```ini
-bind = , mouse:275, sendshortcut, , Return, activewindow
-bind = , mouse:276, sendshortcut, , Return, activewindow
-```
-
-Then reload:
-
-```bash
-hyprctl reload config-only
-```
-
-### OpenClaw route not working
-
-```bash
-openclaw agent --agent main --message "ping" --json
-vibemouse doctor
-```
-
-### Side button not detected on Linux
-
-```bash
-sudo usermod -aG input $USER
-# relogin required
-```
-
-## For AI Assistants and Platform Adapters
-
-Use this guide when adapting to Windows/macOS or custom environments:
-
-- [`docs/AI_ASSISTANT_DEPLOYMENT.md`](./docs/AI_ASSISTANT_DEPLOYMENT.md)
-- [`docs/AI_ASSISTANT_DEPLOYMENT.zh-CN.md`](./docs/AI_ASSISTANT_DEPLOYMENT.zh-CN.md)
-- [`docs/AI_DEBUG_RUNBOOK.md`](./docs/AI_DEBUG_RUNBOOK.md)
-
-It contains architecture contracts, dependency download links, adaptation workflow,
-and a prompt template for autonomous platform adaptation.
+- 原项目：[VibeMouse](https://github.com/vimalinx/VibeMouse)
+- 语音识别：[SenseVoice](https://github.com/FunAudioLLM/SenseVoice)（阿里达摩院）
+- 推理引擎：[FunASR ONNX](https://github.com/modelscope/FunASR)
 
 ## License
 
-Source code is licensed under Apache-2.0. See `LICENSE`.
-
-Third-party and model asset notices: `THIRD_PARTY_NOTICES.md`.
+Apache-2.0. See `LICENSE`.
