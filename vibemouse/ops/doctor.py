@@ -1,14 +1,9 @@
 from __future__ import annotations
 
 import importlib
-import json
-import shlex
-import shutil
-import subprocess
 import sys
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from pathlib import Path
 
 from vibemouse.config import AppConfig, load_config
 
@@ -21,22 +16,12 @@ class DoctorCheck:
 
 
 def run_doctor(*, apply_fixes: bool = False) -> int:
-    if apply_fixes:
-        _apply_doctor_fixes()
-
     checks: list[DoctorCheck] = []
 
     config_check, config = _check_config_load()
     checks.append(config_check)
-
-    if config is not None:
-        checks.extend(_check_openclaw(config))
-
     checks.append(_check_audio_input(config))
-    checks.append(_check_input_device_permissions(config))
-
-    checks.append(_check_hyprland_return_bind_conflict(config))
-    checks.append(_check_user_service_state())
+    checks.append(_check_pynput())
 
     _print_checks(checks)
 
@@ -44,70 +29,6 @@ def run_doctor(*, apply_fixes: bool = False) -> int:
     warn_count = sum(1 for check in checks if check.status == "warn")
     print(f"Doctor summary: {len(checks)} checks, {fail_count} fail, {warn_count} warn")
     return 1 if fail_count else 0
-
-
-def _apply_doctor_fixes() -> None:
-    _fix_hyprland_return_bind_conflict()
-    _ensure_user_service_active()
-
-
-def _fix_hyprland_return_bind_conflict() -> None:
-    bind_path = Path.home() / ".config/hypr/UserConfigs/UserKeybinds.conf"
-    if not bind_path.exists():
-        return
-
-    try:
-        lines = bind_path.read_text(encoding="utf-8", errors="ignore").splitlines()
-    except OSError:
-        return
-
-    changed = False
-    rewritten: list[str] = []
-    for line in lines:
-        stripped = line.strip()
-        if (
-            stripped.startswith("#")
-            or "sendshortcut" not in stripped
-            or "Return" not in stripped
-        ):
-            rewritten.append(line)
-            continue
-
-        if "mouse:275" in stripped or "mouse:276" in stripped:
-            rewritten.append(f"# {line} # auto-disabled by vibemouse doctor --fix")
-            changed = True
-            continue
-
-        rewritten.append(line)
-
-    if not changed:
-        return
-
-    try:
-        bind_path.write_text("\n".join(rewritten) + "\n", encoding="utf-8")
-    except OSError:
-        return
-
-    _ = _run_subprocess(
-        ["hyprctl", "reload", "config-only"],
-        timeout=3.0,
-    )
-
-
-def _ensure_user_service_active() -> None:
-    probe = _run_subprocess(
-        ["systemctl", "--user", "is-active", "vibemouse.service"],
-        timeout=3.0,
-    )
-    if probe is None:
-        return
-    if probe.returncode == 0 and probe.stdout.strip() == "active":
-        return
-
-    _ = _run_subprocess(
-        ["systemctl", "--user", "restart", "vibemouse.service"],
-        timeout=8.0,
-    )
 
 
 def _check_config_load() -> tuple[DoctorCheck, AppConfig | None]:
@@ -129,149 +50,11 @@ def _check_config_load() -> tuple[DoctorCheck, AppConfig | None]:
             status="ok",
             detail=(
                 "loaded "
-                + f"front={config.front_button}, rear={config.rear_button}, "
-                + f"openclaw_agent={config.openclaw_agent or 'none'}"
+                + f"front={config.front_button}, rear={config.rear_button}"
             ),
         ),
         config,
     )
-
-
-def _check_openclaw(config: AppConfig) -> list[DoctorCheck]:
-    checks: list[DoctorCheck] = []
-
-    command_parts = _parse_openclaw_command(config.openclaw_command)
-    if command_parts is None:
-        checks.append(
-            DoctorCheck(
-                name="openclaw-command",
-                status="fail",
-                detail="invalid VIBEMOUSE_OPENCLAW_COMMAND shell syntax",
-            )
-        )
-        return checks
-
-    executable = command_parts[0]
-    resolved = shutil.which(executable)
-    if resolved is None:
-        checks.append(
-            DoctorCheck(
-                name="openclaw-command",
-                status="fail",
-                detail=f"executable not found in PATH: {executable}",
-            )
-        )
-        return checks
-
-    checks.append(
-        DoctorCheck(
-            name="openclaw-command",
-            status="ok",
-            detail=f"resolved executable: {resolved}",
-        )
-    )
-
-    configured_agent = config.openclaw_agent
-    if not configured_agent:
-        checks.append(
-            DoctorCheck(
-                name="openclaw-agent",
-                status="warn",
-                detail="no agent configured; set VIBEMOUSE_OPENCLAW_AGENT",
-            )
-        )
-        return checks
-
-    probe_cmd = [*command_parts, "agents", "list", "--json"]
-    try:
-        probe = subprocess.run(
-            probe_cmd,
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=8.0,
-        )
-    except subprocess.TimeoutExpired:
-        checks.append(
-            DoctorCheck(
-                name="openclaw-agent",
-                status="warn",
-                detail="timed out while probing available agents",
-            )
-        )
-        return checks
-    except OSError as error:
-        checks.append(
-            DoctorCheck(
-                name="openclaw-agent",
-                status="warn",
-                detail=f"failed to run agent probe: {error}",
-            )
-        )
-        return checks
-
-    if probe.returncode != 0:
-        stderr = probe.stderr.strip()
-        checks.append(
-            DoctorCheck(
-                name="openclaw-agent",
-                status="warn",
-                detail=(
-                    "agent probe failed"
-                    if not stderr
-                    else f"agent probe failed: {stderr}"
-                ),
-            )
-        )
-        return checks
-
-    try:
-        payload = json.loads(probe.stdout)
-    except json.JSONDecodeError:
-        checks.append(
-            DoctorCheck(
-                name="openclaw-agent",
-                status="warn",
-                detail="agent probe returned invalid JSON",
-            )
-        )
-        return checks
-
-    if not isinstance(payload, list):
-        checks.append(
-            DoctorCheck(
-                name="openclaw-agent",
-                status="warn",
-                detail="agent probe returned unexpected payload shape",
-            )
-        )
-        return checks
-
-    available_agents = {
-        str(entry.get("id", "")).strip() for entry in payload if isinstance(entry, dict)
-    }
-    if configured_agent in available_agents:
-        checks.append(
-            DoctorCheck(
-                name="openclaw-agent",
-                status="ok",
-                detail=f"configured agent exists: {configured_agent}",
-            )
-        )
-    else:
-        sample = ", ".join(sorted(agent for agent in available_agents if agent)[:5])
-        checks.append(
-            DoctorCheck(
-                name="openclaw-agent",
-                status="warn",
-                detail=(
-                    f"configured agent not found: {configured_agent}; "
-                    + (f"available: {sample}" if sample else "no agents listed")
-                ),
-            )
-        )
-
-    return checks
 
 
 def _check_audio_input(config: AppConfig | None) -> DoctorCheck:
@@ -346,124 +129,20 @@ def _check_audio_input(config: AppConfig | None) -> DoctorCheck:
     )
 
 
-def _check_input_device_permissions(config: AppConfig | None) -> DoctorCheck:
-    if not sys.platform.startswith("linux"):
-        return DoctorCheck(
-            name="input-device-permissions",
-            status="warn",
-            detail="raw input permission check is only available on Linux",
-        )
-
+def _check_pynput() -> DoctorCheck:
     try:
-        evdev_module = importlib.import_module("evdev")
+        importlib.import_module("pynput.mouse")
+        importlib.import_module("pynput.keyboard")
     except Exception as error:
         return DoctorCheck(
-            name="input-device-permissions",
-            status="warn",
-            detail=f"cannot import evdev for raw input check: {error}",
-        )
-
-    list_devices = getattr(evdev_module, "list_devices", None)
-    input_device_ctor = getattr(evdev_module, "InputDevice", None)
-    ecodes = getattr(evdev_module, "ecodes", None)
-    if not callable(list_devices) or input_device_ctor is None or ecodes is None:
-        return DoctorCheck(
-            name="input-device-permissions",
-            status="warn",
-            detail="evdev module is missing required APIs",
-        )
-
-    try:
-        device_paths_obj = list_devices()
-    except Exception as error:
-        return DoctorCheck(
-            name="input-device-permissions",
-            status="warn",
-            detail=f"failed to list /dev/input devices: {error}",
-        )
-
-    if not isinstance(device_paths_obj, list):
-        return DoctorCheck(
-            name="input-device-permissions",
-            status="warn",
-            detail="unexpected device-path payload from evdev",
-        )
-
-    device_paths = [str(path) for path in device_paths_obj]
-    if not device_paths:
-        return DoctorCheck(
-            name="input-device-permissions",
-            status="warn",
-            detail="no /dev/input/event* devices were found",
-        )
-
-    ev_key = int(getattr(ecodes, "EV_KEY", 1))
-    btn_side = int(getattr(ecodes, "BTN_SIDE", 0x116))
-    btn_extra = int(getattr(ecodes, "BTN_EXTRA", 0x117))
-    side_button_codes = {btn_side, btn_extra}
-
-    accessible = 0
-    side_capable = 0
-    permission_denied = 0
-
-    for path in device_paths:
-        try:
-            device = input_device_ctor(path)
-        except PermissionError:
-            permission_denied += 1
-            continue
-        except Exception:
-            continue
-
-        try:
-            capabilities_obj = device.capabilities()
-            accessible += 1
-            if isinstance(capabilities_obj, dict):
-                keys_obj = capabilities_obj.get(ev_key, [])
-                keys = {int(code) for code in keys_obj if isinstance(code, int)}
-                if side_button_codes & keys:
-                    side_capable += 1
-        finally:
-            try:
-                device.close()
-            except Exception:
-                pass
-
-    if accessible == 0 and permission_denied > 0:
-        return DoctorCheck(
-            name="input-device-permissions",
+            name="pynput",
             status="fail",
-            detail=(
-                "cannot access /dev/input event devices (permission denied); "
-                + "add user to input group or configure udev rules"
-            ),
+            detail=f"cannot import pynput: {error}",
         )
-
-    if accessible == 0:
-        return DoctorCheck(
-            name="input-device-permissions",
-            status="warn",
-            detail="no readable /dev/input event devices were found",
-        )
-
-    rear_button = config.rear_button if config is not None else "x2"
-    if side_capable == 0:
-        return DoctorCheck(
-            name="input-device-permissions",
-            status="warn",
-            detail=(
-                f"{accessible} input device(s) readable but none expose side-button codes "
-                + f"for rear={rear_button}"
-            ),
-        )
-
     return DoctorCheck(
-        name="input-device-permissions",
+        name="pynput",
         status="ok",
-        detail=(
-            f"{accessible} readable input device(s), "
-            + f"{side_capable} with side-button capability"
-        ),
+        detail="pynput mouse and keyboard modules loaded",
     )
 
 
@@ -507,97 +186,6 @@ def _to_float(value: object) -> float:
         except ValueError:
             return 0.0
     return 0.0
-
-
-def _check_hyprland_return_bind_conflict(config: AppConfig | None) -> DoctorCheck:
-    bind_path = Path.home() / ".config/hypr/UserConfigs/UserKeybinds.conf"
-    if not bind_path.exists():
-        return DoctorCheck(
-            name="hyprland-bind-conflict",
-            status="warn",
-            detail=f"file not found: {bind_path}",
-        )
-
-    rear_button = config.rear_button if config is not None else "x2"
-    rear_mouse_code = "mouse:275" if rear_button == "x1" else "mouse:276"
-
-    lines = bind_path.read_text(encoding="utf-8", errors="ignore").splitlines()
-    for idx, raw_line in enumerate(lines, start=1):
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if rear_mouse_code in line and "sendshortcut" in line and "Return" in line:
-            return DoctorCheck(
-                name="hyprland-bind-conflict",
-                status="fail",
-                detail=(
-                    f"conflicting return bind found at {bind_path}:{idx}; "
-                    + "disable it to let VibeMouse control rear-button behavior"
-                ),
-            )
-
-    return DoctorCheck(
-        name="hyprland-bind-conflict",
-        status="ok",
-        detail=f"no conflicting {rear_mouse_code} return bind found",
-    )
-
-
-def _check_user_service_state() -> DoctorCheck:
-    probe = _run_subprocess(
-        ["systemctl", "--user", "is-active", "vibemouse.service"],
-        timeout=3.0,
-    )
-    if probe is None:
-        return DoctorCheck(
-            name="user-service",
-            status="warn",
-            detail="could not query service state",
-        )
-
-    state = probe.stdout.strip() or "unknown"
-    if state == "active":
-        return DoctorCheck(
-            name="user-service",
-            status="ok",
-            detail="vibemouse.service is active",
-        )
-
-    return DoctorCheck(
-        name="user-service",
-        status="warn",
-        detail=f"vibemouse.service state is {state}",
-    )
-
-
-def _run_subprocess(
-    cmd: list[str],
-    *,
-    timeout: float,
-) -> subprocess.CompletedProcess[str] | None:
-    try:
-        return subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=timeout,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-
-
-def _parse_openclaw_command(raw: str) -> list[str] | None:
-    cleaned = raw.strip()
-    if not cleaned:
-        return None
-    try:
-        parts = shlex.split(cleaned)
-    except ValueError:
-        return None
-    if not parts:
-        return None
-    return parts
 
 
 def _print_checks(checks: list[DoctorCheck]) -> None:

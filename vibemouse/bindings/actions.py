@@ -4,7 +4,6 @@ from vibemouse.config.schema import AppConfig
 from vibemouse.core.commands import (
     COMMAND_NOOP,
     COMMAND_SEND_ENTER,
-    COMMAND_SUBMIT_RECORDING,
     COMMAND_TOGGLE_RECORDING,
     COMMAND_TRIGGER_SECONDARY_ACTION,
     COMMAND_WORKSPACE_LEFT,
@@ -13,7 +12,6 @@ from vibemouse.core.commands import (
     EVENT_GESTURE_LEFT,
     EVENT_GESTURE_RIGHT,
     EVENT_GESTURE_UP,
-    EVENT_HOTKEY_RECORDING_SUBMIT,
     EVENT_HOTKEY_RECORD_TOGGLE,
     EVENT_MOUSE_SIDE_FRONT_PRESS,
     EVENT_MOUSE_SIDE_REAR_PRESS,
@@ -34,7 +32,7 @@ def command_for_legacy_gesture_action(action: str) -> str:
 
 
 def build_default_bindings(config: AppConfig) -> dict[str, str]:
-    bindings = {
+    return {
         EVENT_MOUSE_SIDE_FRONT_PRESS: COMMAND_TOGGLE_RECORDING,
         EVENT_MOUSE_SIDE_REAR_PRESS: COMMAND_TRIGGER_SECONDARY_ACTION,
         EVENT_HOTKEY_RECORD_TOGGLE: COMMAND_TOGGLE_RECORDING,
@@ -49,9 +47,6 @@ def build_default_bindings(config: AppConfig) -> dict[str, str]:
             config.gesture_right_action
         ),
     }
-    if config.recording_submit_keycode is not None:
-        bindings[EVENT_HOTKEY_RECORDING_SUBMIT] = COMMAND_SUBMIT_RECORDING
-    return bindings
 
 
 def build_resolved_bindings(config: AppConfig) -> dict[str, str]:

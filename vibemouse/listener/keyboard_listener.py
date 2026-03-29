@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import importlib
-import select
+import logging
+import sys
 import threading
 import time
 from collections.abc import Callable
@@ -10,6 +11,7 @@ from typing import Protocol, cast
 
 HotkeyCallback = Callable[[], None]
 EventCallback = Callable[[str], None]
+_LOG = logging.getLogger(__name__)
 
 
 class KeyboardHotkeyListener:
@@ -57,20 +59,31 @@ class KeyboardHotkeyListener:
     def _run(self) -> None:
         last_error_summary: str | None = None
         while not self._stop.is_set():
+            # On Windows, skip evdev entirely — use pynput
+            if sys.platform != "win32":
+                try:
+                    self._run_evdev()
+                    self._reset_pressed_state()
+                    continue
+                except Exception:
+                    pass
+
             try:
-                self._run_evdev()
+                self._run_pynput()
                 self._reset_pressed_state()
                 continue
             except Exception as error:
                 summary = f"Keyboard hotkey listener unavailable ({error}). Retrying..."
                 if summary != last_error_summary:
-                    print(summary)
+                    _LOG.warning(summary)
                     last_error_summary = summary
                 self._reset_pressed_state()
                 if self._stop.wait(1.0):
                     return
 
     def _run_evdev(self) -> None:
+        import select
+
         try:
             evdev_module = importlib.import_module("evdev")
         except Exception as error:
@@ -131,6 +144,52 @@ class KeyboardHotkeyListener:
         finally:
             for dev in devices:
                 dev.close()
+
+    def _run_pynput(self) -> None:
+        """pynput-based keyboard listener for Windows and other platforms."""
+        try:
+            keyboard_module = importlib.import_module("pynput.keyboard")
+        except Exception as error:
+            raise RuntimeError("pynput.keyboard is not available") from error
+
+        listener_ctor = cast(
+            _PynputKeyboardListenerCtor,
+            getattr(keyboard_module, "Listener"),
+        )
+        key_class = getattr(keyboard_module, "Key")
+        keycode_class = getattr(keyboard_module, "KeyCode")
+
+        def _extract_vk(key: object) -> int | None:
+            """Extract virtual key code from a pynput key object."""
+            vk = getattr(key, "vk", None)
+            if vk is not None:
+                return int(vk)
+            value = getattr(key, "value", None)
+            if value is not None:
+                vk2 = getattr(value, "vk", None)
+                if vk2 is not None:
+                    return int(vk2)
+            return None
+
+        def on_press(key: object) -> None:
+            vk = _extract_vk(key)
+            if vk is not None and vk in self._combo:
+                if self._process_key_event(vk, 1):
+                    self._dispatch_hotkey()
+
+        def on_release(key: object) -> None:
+            vk = _extract_vk(key)
+            if vk is not None and vk in self._combo:
+                self._process_key_event(vk, 0)
+
+        listener = listener_ctor(on_press=on_press, on_release=on_release)
+        _LOG.info("Keyboard hotkey listener using pynput backend")
+        listener.start()
+        try:
+            while not self._stop.is_set():
+                time.sleep(0.2)
+        finally:
+            listener.stop()
 
     def _reset_pressed_state(self) -> None:
         with self._state_lock:
@@ -197,3 +256,18 @@ class _ListDevicesFn(Protocol):
 class _Ecodes(Protocol):
     EV_KEY: int
     KEY_A: int
+
+
+class _PynputKeyboardListener(Protocol):
+    def start(self) -> None: ...
+
+    def stop(self) -> None: ...
+
+
+class _PynputKeyboardListenerCtor(Protocol):
+    def __call__(
+        self,
+        *,
+        on_press: Callable[[object], None] | None = None,
+        on_release: Callable[[object], None] | None = None,
+    ) -> _PynputKeyboardListener: ...

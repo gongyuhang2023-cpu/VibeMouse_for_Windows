@@ -1,35 +1,18 @@
 from __future__ import annotations
 
 import importlib
-import json
-import shlex
-import subprocess
+import logging
+import sys
 import time
-from dataclasses import dataclass
 from typing import Protocol, cast
 
 import pyperclip
 
-from vibemouse.platform.system_integration import (
-    SystemIntegration,
-    create_system_integration,
-    is_terminal_window_payload,
-    load_atspi_module,
-    probe_text_input_focus_via_atspi,
-    probe_send_enter_via_atspi,
-)
+_LOG = logging.getLogger(__name__)
 
 
 class TextOutput:
-    def __init__(
-        self,
-        *,
-        system_integration: SystemIntegration | None = None,
-        openclaw_command: str = "openclaw",
-        openclaw_agent: str | None = None,
-        openclaw_timeout_s: float = 20.0,
-        openclaw_retries: int = 0,
-    ) -> None:
+    def __init__(self) -> None:
         try:
             keyboard_module = importlib.import_module("pynput.keyboard")
         except Exception as error:
@@ -49,28 +32,13 @@ class TextOutput:
         self._enter_key: object = key_holder.enter
         self._ctrl_key: object = key_holder.ctrl
         self._shift_key: object = key_holder.shift
-        self._insert_key: object = key_holder.insert
-        self._atspi: object | None = load_atspi_module()
-        self._system_integration: SystemIntegration = (
-            system_integration
-            if system_integration is not None
-            else create_system_integration()
-        )
-        self._hyprland_session: bool = self._system_integration.is_hyprland
-        self._openclaw_command: str = openclaw_command
-        self._openclaw_agent: str | None = openclaw_agent
-        self._openclaw_timeout_s: float = max(0.5, openclaw_timeout_s)
-        self._openclaw_retries: int = max(0, int(openclaw_retries))
+        self._alt_key: object = key_holder.alt
 
     def send_enter(self, *, mode: str = "enter") -> None:
         normalized = mode.strip().lower()
         if normalized == "none":
             return
         if normalized == "enter":
-            if self._send_hyprland_shortcut(mod="", key="Return"):
-                return
-            if self._send_enter_via_atspi():
-                return
             self._tap_key(self._enter_key)
             return
         if normalized == "ctrl_enter":
@@ -86,174 +54,47 @@ class TextOutput:
         if not normalized:
             return "empty"
 
-        if self._is_text_input_focused():
-            self._kb.type(normalized)
-            return "typed"
-
         pyperclip.copy(normalized)
-        if auto_paste:
+
+        if sys.platform == "win32" or auto_paste:
             try:
-                self._paste_clipboard()
+                self._safe_paste()
                 return "pasted"
-            except Exception:
+            except Exception as error:
+                _LOG.warning("Paste failed, text is in clipboard: %s", error)
                 return "clipboard"
+
         return "clipboard"
 
-    def send_to_openclaw(self, text: str) -> str:
-        return self.send_to_openclaw_result(text).route
+    def _safe_paste(self) -> None:
+        """Simulate Ctrl+V with aggressive modifier key cleanup."""
+        # Step 1: Release ALL modifier keys first to ensure clean state
+        self._release_all_modifiers()
+        time.sleep(0.05)
 
-    def send_to_openclaw_result(self, text: str) -> "OpenClawDispatchResult":
-        normalized = text.strip()
-        if not normalized:
-            return OpenClawDispatchResult(route="empty", reason="empty_text")
+        # Step 2: Press Ctrl+V
+        try:
+            self._kb.press(self._ctrl_key)
+            time.sleep(0.03)
+            self._kb.press("v")
+            time.sleep(0.03)
+            self._kb.release("v")
+            time.sleep(0.03)
+            self._kb.release(self._ctrl_key)
+        except Exception:
+            pass
 
-        command = self._build_openclaw_command(normalized)
-        if command is None:
-            pyperclip.copy(normalized)
-            return OpenClawDispatchResult(route="clipboard", reason="invalid_command")
+        # Step 3: Force release ALL modifiers again to prevent stuck keys
+        time.sleep(0.05)
+        self._release_all_modifiers()
 
-        attempts = max(1, int(getattr(self, "_openclaw_retries", 0)) + 1)
-        last_reason = "spawn_error"
-        for attempt in range(attempts):
+    def _release_all_modifiers(self) -> None:
+        """Force release all modifier keys to prevent stuck key state."""
+        for key in (self._ctrl_key, self._shift_key, self._alt_key):
             try:
-                _ = subprocess.Popen(
-                    command,
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    start_new_session=True,
-                )
-                if attempt == 0:
-                    return OpenClawDispatchResult(
-                        route="openclaw",
-                        reason="dispatched",
-                    )
-                return OpenClawDispatchResult(
-                    route="openclaw",
-                    reason=f"dispatched_after_retry_{attempt}",
-                )
-            except OSError as error:
-                last_reason = f"spawn_error:{error.__class__.__name__}"
-
-        pyperclip.copy(normalized)
-        return OpenClawDispatchResult(route="clipboard", reason=last_reason)
-
-    def _build_openclaw_command(self, message: str) -> list[str] | None:
-        raw_command = str(getattr(self, "_openclaw_command", "openclaw")).strip()
-        if not raw_command:
-            return None
-
-        try:
-            parts = shlex.split(raw_command)
-        except ValueError:
-            return None
-
-        if not parts:
-            return None
-
-        command = [*parts, "agent", "--message", message, "--json"]
-        agent = getattr(self, "_openclaw_agent", None)
-        if isinstance(agent, str):
-            normalized_agent = agent.strip()
-            if normalized_agent:
-                command.extend(["--agent", normalized_agent])
-        return command
-
-    def _paste_clipboard(self) -> None:
-        terminal_active = self._is_hyprland_terminal_active()
-        for mod, key in self._paste_shortcuts(terminal_active=terminal_active):
-            if self._send_platform_shortcut(mod=mod, key=key):
-                return
-
-        if (
-            self._hyprland_session
-            and terminal_active
-            and self._send_ctrl_shift_v_via_keyboard()
-        ):
-            return
-
-        if (
-            self._hyprland_session
-            and terminal_active
-            and self._send_shift_insert_via_keyboard()
-        ):
-            return
-
-        self._send_ctrl_v_via_keyboard()
-
-    def _send_ctrl_v_via_keyboard(self) -> None:
-        pressed_ctrl = False
-        pressed_v = False
-        try:
-            self._kb.press(self._ctrl_key)
-            pressed_ctrl = True
-            self._kb.press("v")
-            pressed_v = True
-        finally:
-            if pressed_v:
-                try:
-                    self._kb.release("v")
-                except Exception:
-                    pass
-            if pressed_ctrl:
-                try:
-                    self._kb.release(self._ctrl_key)
-                except Exception:
-                    pass
-
-    def _send_ctrl_shift_v_via_keyboard(self) -> bool:
-        pressed_ctrl = False
-        pressed_shift = False
-        pressed_v = False
-        try:
-            self._kb.press(self._ctrl_key)
-            pressed_ctrl = True
-            self._kb.press(self._shift_key)
-            pressed_shift = True
-            self._kb.press("v")
-            pressed_v = True
-            return True
-        except Exception:
-            return False
-        finally:
-            if pressed_v:
-                try:
-                    self._kb.release("v")
-                except Exception:
-                    pass
-            if pressed_shift:
-                try:
-                    self._kb.release(self._shift_key)
-                except Exception:
-                    pass
-            if pressed_ctrl:
-                try:
-                    self._kb.release(self._ctrl_key)
-                except Exception:
-                    pass
-
-    def _send_shift_insert_via_keyboard(self) -> bool:
-        pressed_shift = False
-        pressed_insert = False
-        try:
-            self._kb.press(self._shift_key)
-            pressed_shift = True
-            self._kb.press(self._insert_key)
-            pressed_insert = True
-            return True
-        except Exception:
-            return False
-        finally:
-            if pressed_insert:
-                try:
-                    self._kb.release(self._insert_key)
-                except Exception:
-                    pass
-            if pressed_shift:
-                try:
-                    self._kb.release(self._shift_key)
-                except Exception:
-                    pass
+                self._kb.release(key)
+            except Exception:
+                pass
 
     def _tap_key(self, key: object) -> None:
         self._kb.press(key)
@@ -261,174 +102,18 @@ class TextOutput:
         self._kb.release(key)
 
     def _tap_modified_key(self, modifier: object, key: object) -> None:
-        pressed_modifier = False
-        pressed_key = False
+        self._release_all_modifiers()
         try:
             self._kb.press(modifier)
-            pressed_modifier = True
+            time.sleep(0.02)
             self._kb.press(key)
-            pressed_key = True
-            time.sleep(0.012)
-        finally:
-            if pressed_key:
-                try:
-                    self._kb.release(key)
-                except Exception:
-                    pass
-            if pressed_modifier:
-                try:
-                    self._kb.release(modifier)
-                except Exception:
-                    pass
-
-    def _send_enter_via_atspi(self) -> bool:
-        try:
-            system_integration = self._system_integration
-        except AttributeError:
-            system_integration = None
-
-        if system_integration is not None:
-            try:
-                handled = system_integration.send_enter_via_accessibility()
-            except Exception:
-                handled = None
-            if handled is True:
-                return True
-
-        atspi_module = getattr(self, "_atspi", None)
-        return probe_send_enter_via_atspi(
-            atspi_module=atspi_module,
-            lazy_load=False,
-        )
-
-    def _paste_shortcuts(self, *, terminal_active: bool) -> tuple[tuple[str, str], ...]:
-        try:
-            system_integration = self._system_integration
-        except AttributeError:
-            system_integration = None
-
-        if system_integration is not None:
-            try:
-                shortcuts = system_integration.paste_shortcuts(
-                    terminal_active=terminal_active
-                )
-            except Exception:
-                shortcuts = ()
-            if shortcuts:
-                return shortcuts
-
-        if terminal_active:
-            return (
-                ("CTRL SHIFT", "V"),
-                ("SHIFT", "Insert"),
-                ("CTRL", "V"),
-            )
-        return (("CTRL", "V"),)
-
-    def _send_platform_shortcut(self, *, mod: str, key: str) -> bool:
-        try:
-            system_integration = self._system_integration
-        except AttributeError:
-            system_integration = None
-
-        if system_integration is not None:
-            try:
-                if bool(system_integration.send_shortcut(mod=mod, key=key)):
-                    return True
-                if not self._hyprland_session:
-                    return False
-            except Exception:
-                if not self._hyprland_session:
-                    return False
-
-        if not self._hyprland_session:
-            return False
-
-        mod_part = mod.strip().upper()
-        if mod_part:
-            arg = f"{mod_part}, {key}, activewindow"
-        else:
-            arg = f", {key}, activewindow"
-
-        try:
-            proc = subprocess.run(
-                ["hyprctl", "dispatch", "sendshortcut", arg],
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=1.0,
-            )
-        except (OSError, subprocess.TimeoutExpired):
-            return False
-
-        return proc.returncode == 0 and proc.stdout.strip() == "ok"
-
-    def _send_hyprland_shortcut(self, *, mod: str, key: str) -> bool:
-        return self._send_platform_shortcut(mod=mod, key=key)
-
-    def _is_terminal_window_active(self) -> bool:
-        payload_map: dict[str, object] | None = None
-        try:
-            system_integration = self._system_integration
-        except AttributeError:
-            system_integration = None
-
-        if system_integration is not None:
-            try:
-                terminal_active = system_integration.is_terminal_window_active()
-            except Exception:
-                terminal_active = None
-            if isinstance(terminal_active, bool):
-                return terminal_active
-
-        if not self._hyprland_session:
-            return False
-
-        if payload_map is None:
-            try:
-                proc = subprocess.run(
-                    ["hyprctl", "-j", "activewindow"],
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                    timeout=1.0,
-                )
-            except (OSError, subprocess.TimeoutExpired):
-                return False
-
-            if proc.returncode != 0:
-                return False
-
-            try:
-                payload_obj = cast(object, json.loads(proc.stdout))
-            except json.JSONDecodeError:
-                return False
-
-            if not isinstance(payload_obj, dict):
-                return False
-
-            payload_map = cast(dict[str, object], payload_obj)
-
-        return is_terminal_window_payload(payload_map)
-
-    def _is_hyprland_terminal_active(self) -> bool:
-        return self._is_terminal_window_active()
-
-    def _is_text_input_focused(self) -> bool:
-        try:
-            system_integration = self._system_integration
-        except AttributeError:
-            system_integration = None
-
-        if system_integration is not None:
-            try:
-                focused = system_integration.is_text_input_focused()
-            except Exception:
-                focused = None
-            if isinstance(focused, bool):
-                return focused
-
-        return probe_text_input_focus_via_atspi()
+            time.sleep(0.02)
+            self._kb.release(key)
+            time.sleep(0.02)
+            self._kb.release(modifier)
+        except Exception:
+            pass
+        self._release_all_modifiers()
 
 
 class _KeyboardController(Protocol):
@@ -447,10 +132,4 @@ class _KeyHolder(Protocol):
     enter: object
     ctrl: object
     shift: object
-    insert: object
-
-
-@dataclass(frozen=True)
-class OpenClawDispatchResult:
-    route: str
-    reason: str
+    alt: object

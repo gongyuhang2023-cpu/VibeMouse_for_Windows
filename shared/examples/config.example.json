@@ -18,11 +18,7 @@
   },
   "output": {
     "enter_mode": "enter",
-    "auto_paste": false
-  },
-  "openclaw": {
-    "command": "openclaw",
-    "agent": "main"
+    "auto_paste": true
   },
   "startup": {
     "prewarm_on_start": true

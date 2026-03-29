@@ -142,16 +142,6 @@ def apply_env_overrides(
         config.enter_mode,
         {"enter", "ctrl_enter", "shift_enter", "none"},
     )
-    openclaw_command = source.get(
-        "VIBEMOUSE_OPENCLAW_COMMAND",
-        config.openclaw_command,
-    ).strip()
-    if not openclaw_command:
-        raise ValueError("VIBEMOUSE_OPENCLAW_COMMAND must not be empty")
-    openclaw_agent = source.get(
-        "VIBEMOUSE_OPENCLAW_AGENT",
-        "" if config.openclaw_agent is None else config.openclaw_agent,
-    ).strip()
     prewarm_delay_s = _require_non_negative_float(
         "VIBEMOUSE_PREWARM_DELAY_S",
         _read_float(source, "VIBEMOUSE_PREWARM_DELAY_S", config.prewarm_delay_s),
@@ -225,20 +215,6 @@ def apply_env_overrides(
         ),
         prewarm_delay_s=prewarm_delay_s,
         status_file=_read_path(source, "VIBEMOUSE_STATUS_FILE", config.status_file),
-        openclaw_command=openclaw_command,
-        openclaw_agent=openclaw_agent or None,
-        openclaw_timeout_s=_require_positive_float(
-            "VIBEMOUSE_OPENCLAW_TIMEOUT_S",
-            _read_float(
-                source,
-                "VIBEMOUSE_OPENCLAW_TIMEOUT_S",
-                config.openclaw_timeout_s,
-            ),
-        ),
-        openclaw_retries=_require_non_negative(
-            "VIBEMOUSE_OPENCLAW_RETRIES",
-            _read_int(source, "VIBEMOUSE_OPENCLAW_RETRIES", config.openclaw_retries),
-        ),
         front_button=front_button,
         rear_button=rear_button,
         record_hotkey_keycodes=record_hotkey_keycodes,

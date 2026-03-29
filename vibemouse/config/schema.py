@@ -61,10 +61,6 @@ class AppConfig:
     prewarm_on_start: bool
     prewarm_delay_s: float
     status_file: Path
-    openclaw_command: str
-    openclaw_agent: str | None
-    openclaw_timeout_s: float
-    openclaw_retries: int
     front_button: str
     rear_button: str
     record_hotkey_keycodes: tuple[int, ...]
@@ -117,8 +113,8 @@ def build_default_config_document() -> dict[str, object]:
             "trust_remote_code": False,
         },
         "input": {
-            "front_button": "x1",
-            "rear_button": "x2",
+            "front_button": "x2",
+            "rear_button": "x1",
             "record_hotkey_keycodes": [42, 125, 193],
             "recording_submit_keycode": None,
             "button_debounce_ms": 150,
@@ -134,13 +130,7 @@ def build_default_config_document() -> dict[str, object]:
         },
         "output": {
             "enter_mode": "enter",
-            "auto_paste": False,
-        },
-        "openclaw": {
-            "command": "openclaw",
-            "agent": "main",
-            "timeout_s": 20.0,
-            "retries": 0,
+            "auto_paste": True,
         },
         "startup": {
             "prewarm_on_start": True,
@@ -162,7 +152,6 @@ def config_document_to_app_config(document: Mapping[str, object]) -> AppConfig:
     transcriber = _expect_mapping(normalized, "transcriber")
     input_section = _expect_mapping(normalized, "input")
     output = _expect_mapping(normalized, "output")
-    openclaw = _expect_mapping(normalized, "openclaw")
     startup = _expect_mapping(normalized, "startup")
     logs = _expect_mapping(normalized, "logs")
     runtime = _expect_mapping(normalized, "runtime")
@@ -199,10 +188,6 @@ def config_document_to_app_config(document: Mapping[str, object]) -> AppConfig:
         prewarm_on_start=bool(startup["prewarm_on_start"]),
         prewarm_delay_s=float(startup["prewarm_delay_s"]),
         status_file=Path(str(runtime["status_file"])),
-        openclaw_command=str(openclaw["command"]),
-        openclaw_agent=_coerce_optional_string(openclaw["agent"]),
-        openclaw_timeout_s=float(openclaw["timeout_s"]),
-        openclaw_retries=int(openclaw["retries"]),
         front_button=str(input_section["front_button"]),
         rear_button=str(input_section["rear_button"]),
         record_hotkey_keycodes=tuple(
@@ -225,7 +210,6 @@ def normalize_config_document(document: Mapping[str, object]) -> dict[str, objec
         "transcriber",
         "input",
         "output",
-        "openclaw",
         "startup",
         "logs",
         "runtime",
@@ -256,9 +240,6 @@ def normalize_config_document(document: Mapping[str, object]) -> dict[str, objec
     )
     normalized["output"] = _normalize_output_section(
         _merge_section(defaults, document, "output")
-    )
-    normalized["openclaw"] = _normalize_openclaw_section(
-        _merge_section(defaults, document, "openclaw")
     )
     normalized["startup"] = _normalize_startup_section(
         _merge_section(defaults, document, "startup")
@@ -484,18 +465,6 @@ def _normalize_output_section(section: Mapping[str, object]) -> dict[str, object
             section["enter_mode"], "output.enter_mode", _ENTER_MODE_CHOICES
         ),
         "auto_paste": _coerce_bool(section["auto_paste"], "output.auto_paste"),
-    }
-
-
-def _normalize_openclaw_section(section: Mapping[str, object]) -> dict[str, object]:
-    command = _coerce_non_empty_string(section["command"], "openclaw.command")
-    return {
-        "command": command,
-        "agent": _coerce_optional_string(section["agent"]),
-        "timeout_s": _coerce_positive_float(
-            section["timeout_s"], "openclaw.timeout_s"
-        ),
-        "retries": _coerce_non_negative_int(section["retries"], "openclaw.retries"),
     }
 
 

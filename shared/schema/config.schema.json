@@ -27,7 +27,6 @@
           "reload_config",
           "send_enter",
           "shutdown",
-          "submit_recording",
           "toggle_recording",
           "trigger_secondary_action",
           "workspace_left",
@@ -197,31 +196,6 @@
         "auto_paste": {
           "type": "boolean",
           "default": false
-        }
-      }
-    },
-    "openclaw": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "command": {
-          "type": "string",
-          "minLength": 1,
-          "default": "openclaw"
-        },
-        "agent": {
-          "type": ["string", "null"],
-          "default": "main"
-        },
-        "timeout_s": {
-          "type": "number",
-          "exclusiveMinimum": 0,
-          "default": 20.0
-        },
-        "retries": {
-          "type": "integer",
-          "minimum": 0,
-          "default": 0
         }
       }
     },

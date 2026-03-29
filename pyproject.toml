@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vibemouse"
-version = "0.2.2"
-description = "Mouse side-button voice dictation with SenseVoice"
+version = "1.0.0"
+description = "Mouse side-button voice input for Windows with SenseVoice (local ASR)"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }
@@ -15,7 +15,7 @@ classifiers = [
 ]
 authors = [{ name = "VibeMouse" }]
 dependencies = [
-  "numpy>=1.24,<2",
+  "numpy>=1.24",
   "sounddevice>=0.4.6",
   "soundfile>=0.12.1",
   "pynput>=1.7.7",
@@ -31,7 +31,7 @@ dependencies = [
 
 [project.optional-dependencies]
 ci = [
-  "numpy>=1.24,<2",
+  "numpy>=1.24",
   "pyperclip>=1.9.0",
   "pytest>=8.0",
   "pytest-cov>=5.0",

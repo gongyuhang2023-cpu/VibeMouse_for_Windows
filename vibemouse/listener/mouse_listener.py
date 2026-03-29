@@ -119,17 +119,25 @@ class SideButtonListener:
             self._thread.join(timeout=2)
 
     def _run(self) -> None:
+        import sys as _sys
+
         last_error_summary: str | None = None
         while not self._stop.is_set():
-            evdev_error: Exception | None = None
-            try:
-                self._run_evdev()
-                continue
-            except Exception as error:
-                evdev_error = error
+            # On Windows, skip evdev entirely — it's Linux-only
+            if _sys.platform != "win32":
+                evdev_error: Exception | None = None
+                try:
+                    self._run_evdev()
+                    continue
+                except Exception as error:
+                    evdev_error = error
+            else:
+                evdev_error = RuntimeError("evdev not available on Windows")
 
+            # On Windows, run pynput without timeout (no need to rescan for evdev)
+            pynput_timeout = None if _sys.platform == "win32" else self._rescan_interval_s
             try:
-                self._run_pynput(timeout_s=self._rescan_interval_s)
+                self._run_pynput(timeout_s=pynput_timeout)
                 continue
             except Exception as pynput_error:
                 summary = (
@@ -358,33 +366,11 @@ class SideButtonListener:
                 button_label = "front"
             elif btn_name in rear_candidates:
                 button_label = "rear"
-            elif btn_name in right_candidates:
-                button_label = "right"
+
+            # Only handle right-click when gestures are enabled and right is the trigger.
+            # Otherwise ignore it completely to avoid infinite replay loops.
 
             if button_label is None:
-                return
-
-            if self._gestures_enabled and self._is_gesture_trigger_button(button_label):
-                if button_label == "right":
-                    if pressed:
-                        self._begin_right_trigger_press(initial_position=(x, y))
-                    else:
-                        (
-                            should_replay_right_click,
-                            gesture_direction,
-                        ) = self._consume_right_trigger_release()
-                        if gesture_direction is not None:
-                            self._dispatch_gesture(gesture_direction)
-                        elif should_replay_right_click:
-                            self._dispatch_click_async(button_label)
-                else:
-                    if pressed:
-                        self._start_gesture_capture(
-                            initial_position=(x, y),
-                            button_label=button_label,
-                        )
-                    else:
-                        self._finish_gesture_capture(button_label)
                 return
 
             if pressed:
@@ -405,8 +391,11 @@ class SideButtonListener:
                 return
             self._accumulate_gesture_position(x, y)
 
-        listener = listener_ctor(on_click=on_click, on_move=on_move)
-        _LOG.info("Mouse listener using pynput fallback backend")
+        # Only register on_move if gestures are enabled — otherwise it fires
+        # for every mouse pixel movement and wastes CPU.
+        move_handler = on_move if self._gestures_enabled else None
+        listener = listener_ctor(on_click=on_click, on_move=move_handler)
+        _LOG.info("Mouse listener using pynput backend")
         listener.start()
         deadline: float | None = None
         if timeout_s is not None:
