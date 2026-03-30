@@ -14,30 +14,69 @@
 
 ## 安装
 
-### 1. 环境要求
+### 方式一：一键安装（推荐）
+
+无需预装 Python、Git 或任何工具，打开 PowerShell 粘贴一行命令即可：
+
+```powershell
+irm https://raw.githubusercontent.com/gongyuhang2023-cpu/VibeMouse_for_Windows/master/install.ps1 | iex
+```
+
+<details>
+<summary>也可以在 CMD 中运行</summary>
+
+```cmd
+powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/gongyuhang2023-cpu/VibeMouse_for_Windows/master/install.ps1 | iex"
+```
+
+</details>
+
+脚本全自动完成：下载项目 → 安装 Miniconda → 创建 Python 3.11 环境 → 安装依赖 → 下载模型 → 自检 → 可选开机自启。
+
+> **⚠️ Python 版本说明**：本项目需要 **Python 3.10 ~ 3.12**。Python 3.13+ 因 numpy ABI 不兼容会导致模型加载崩溃（segfault）。一键安装脚本已自动使用 Python 3.11，无需手动处理。
+
+### 方式二：手动安装
+
+<details>
+<summary>点击展开手动安装步骤</summary>
+
+#### 1. 环境要求
 
 - Windows 10/11
-- Python 3.10+（推荐 [Miniconda](https://docs.conda.io/en/latest/miniconda.html)）
+- **Python 3.10 ~ 3.12**（推荐用 [Miniconda](https://docs.conda.io/en/latest/miniconda.html) 管理）
 - 带侧键的鼠标
 
-### 2. 克隆项目
+> ⚠️ **不要使用 Python 3.13+**：`funasr-onnx` 的 C 扩展按 numpy 1.x ABI 编译，Python 3.13 上 numpy 1.x 无预编译 wheel，pip 会安装 numpy 2.x，导致模型加载时 segfault。
+
+#### 2. 创建环境
+
+```bash
+# 推荐用 conda 创建隔离环境
+conda create -n vibemouse python=3.11 -y
+conda activate vibemouse
+```
+
+#### 3. 克隆项目
 
 ```bash
 git clone https://github.com/gongyuhang2023-cpu/VibeMouse_for_Windows.git
 cd VibeMouse_for_Windows
 ```
 
-### 3. 安装依赖
+#### 4. 安装依赖
 
 ```bash
+# 先锁定 numpy 版本（关键！）
+pip install "numpy==1.26.4"
+
 # 基础依赖
 pip install sounddevice soundfile pynput pyperclip jieba onnxruntime modelscope sentencepiece kaldi-native-fbank onnx
 
-# librosa 及其依赖
-pip install librosa lazy_loader pooch soxr audioread decorator joblib numba scikit-learn
+# librosa
+pip install librosa
 
-# funasr-onnx（跳过 numpy 版本约束）
-pip install funasr-onnx --no-deps
+# funasr-onnx
+pip install funasr-onnx
 
 # PyTorch（CPU 版本，约 115MB）
 pip install torch --index-url https://download.pytorch.org/whl/cpu
@@ -46,29 +85,27 @@ pip install torch --index-url https://download.pytorch.org/whl/cpu
 pip install -e . --no-deps
 ```
 
-### 4. 下载语音识别模型（首次运行自动下载，约 230MB）
+#### 5. 下载语音识别模型
 
-首次启动会从 ModelScope 下载 SenseVoice 模型，需要网络连接。下载完成后即可离线使用。
+首次启动会从 ModelScope 自动下载 ONNX 模型（约 230MB）。
 
-如果 tokenizer 文件缺失，手动补充：
+如果 tokenizer 文件缺失（日志提示 `chn_jpn_yue_eng_ko_spectok.bpe.model is missing`），运行：
 
 ```bash
-python -c "from modelscope import snapshot_download; snapshot_download('iic/SenseVoiceSmall', allow_patterns=['chn_jpn_yue_eng_ko_spectok.bpe.model'])"
+python -c "from modelscope import snapshot_download; snapshot_download('iic/SenseVoiceSmall')"
 ```
 
-然后将 `chn_jpn_yue_eng_ko_spectok.bpe.model` 复制到 ONNX 模型目录：
+tokenizer 文件会自动复制到 ONNX 模型目录。
 
-```
-%USERPROFILE%\.cache\modelscope\hub\models\iic\SenseVoiceSmall-onnx\
-```
-
-### 5. 验证安装
+#### 6. 验证安装
 
 ```bash
 python -m vibemouse.cli.main doctor
 ```
 
 三项全部 `[OK]` 即可使用。
+
+</details>
 
 ## 使用
 
