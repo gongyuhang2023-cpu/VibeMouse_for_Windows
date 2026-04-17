@@ -144,9 +144,9 @@ if (Test-Path $PYTHON) {
 # ============================================================
 Write-Step 4 $totalSteps "Install dependencies (this takes a few minutes) ..."
 
-function Pip-Install($desc, $args) {
+function Pip-Install($desc, $pkgArgs) {
     Write-Host "       $desc ..."
-    $pipArgs = @("-m", "pip", "install") + $args + @("--quiet")
+    $pipArgs = @("-m", "pip", "install") + $pkgArgs + @("--quiet")
     & $PYTHON @pipArgs
     if ($LASTEXITCODE -ne 0) { Exit-WithError "Failed: $desc" }
 }
