@@ -203,22 +203,27 @@ Write-Ok "Model ready"
 # ============================================================
 Write-Step 6 $totalSteps "Generate launcher scripts ..."
 
+# Write without BOM — VBScript rejects UTF-8 BOM with error 800A0408 ("invalid character")
+$utf8NoBom = New-Object System.Text.UTF8Encoding $false
+
 # .bat
-@"
+$batContent = @"
 @echo off
 title VibeMouse Voice Input
 echo Starting VibeMouse ...
 cd /d "$INSTALL_DIR"
 "$PYTHON" -m vibemouse.cli.main run
 pause
-"@ | Set-Content "$INSTALL_DIR\start_vibemouse.bat" -Encoding UTF8
+"@
+[System.IO.File]::WriteAllText("$INSTALL_DIR\start_vibemouse.bat", $batContent, $utf8NoBom)
 
 # .vbs
-@"
+$vbsContent = @"
 Set WshShell = CreateObject("WScript.Shell")
 WshShell.CurrentDirectory = "$INSTALL_DIR"
 WshShell.Run """$PYTHON"" -m vibemouse.cli.main run", 0, False
-"@ | Set-Content "$INSTALL_DIR\start_vibemouse_silent.vbs" -Encoding UTF8
+"@
+[System.IO.File]::WriteAllText("$INSTALL_DIR\start_vibemouse_silent.vbs", $vbsContent, $utf8NoBom)
 
 Write-Ok "start_vibemouse.bat (windowed) + start_vibemouse_silent.vbs (silent)"
 

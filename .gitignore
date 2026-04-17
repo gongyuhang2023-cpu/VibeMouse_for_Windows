@@ -14,3 +14,8 @@ __pycache__/
 # Temporary platform port-integration snapshots kept under repo root
 /windows-port/
 /windows-port-*/
+
+# Launcher scripts are generated per-machine by install.ps1 with user-specific
+# absolute paths (miniconda/install dir). Never commit the rendered versions.
+/start_vibemouse.bat
+/start_vibemouse_silent.vbs
