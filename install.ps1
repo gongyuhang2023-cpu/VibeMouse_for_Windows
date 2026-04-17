@@ -22,7 +22,7 @@ $ErrorActionPreference = "Stop"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
 # ---------- 配置 ----------
-$REPO_URL   = "https://github.com/gongyuhang2023-cpu/VibeMouse_for_Windows/archive/refs/heads/main.zip"
+$REPO_URL   = "https://github.com/gongyuhang2023-cpu/VibeMouse_for_Windows/archive/refs/heads/master.zip"
 $INSTALL_DIR = "$env:USERPROFILE\VibeMouse_for_Windows"
 $CONDA_DIR   = "$env:USERPROFILE\miniconda3"
 $ENV_NAME    = "vibemouse"
