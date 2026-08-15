@@ -22,6 +22,7 @@ def run_doctor(*, apply_fixes: bool = False) -> int:
     checks.append(config_check)
     checks.append(_check_audio_input(config))
     checks.append(_check_pynput())
+    checks.append(_check_vocabulary(config))
 
     _print_checks(checks)
 
@@ -127,6 +128,109 @@ def _check_audio_input(config: AppConfig | None) -> DoctorCheck:
         status="ok",
         detail=f"detected {len(input_devices)} input-capable device(s)",
     )
+
+
+# faster-whisper truncates the prompt and the hotword string to
+# WhisperModel.max_length // 2 - 1 tokens each, silently, in get_prompt().
+_PROMPT_TOKEN_BUDGET = 448 // 2 - 1
+
+# Measured on this project's own test sets: term recall keeps degrading as
+# unrelated terms are added long before the token budget runs out, because every
+# extra term dilutes the bias on the rest. Going from 8 relevant terms to 29
+# cost 41/42 -> 37/42 on the audio the 8 were chosen for. Terms still earn their
+# place when they are actually spoken (0 -> 38/38 on tooling audio), so this is a
+# nudge to prune what you no longer say, not a hard ceiling.
+_TERM_COUNT_ADVISORY = 30
+
+
+def _check_vocabulary(config: AppConfig | None) -> DoctorCheck:
+    if config is None:
+        return DoctorCheck(
+            name="vocabulary",
+            status="warn",
+            detail="skipped: config did not load",
+        )
+
+    terms = config.vocabulary_terms
+    corrections = config.corrections
+    if not terms and not corrections:
+        return DoctorCheck(
+            name="vocabulary",
+            status="ok",
+            detail="no vocabulary configured",
+        )
+
+    summary = f"{len(terms)} terms, {len(corrections)} corrections"
+
+    if terms and config.transcriber_backend != "faster_whisper":
+        return DoctorCheck(
+            name="vocabulary",
+            status="warn",
+            detail=(
+                f"{summary}; backend {config.transcriber_backend!r} ignores "
+                "vocabulary.terms (only faster_whisper can bias decoding). "
+                "corrections still apply."
+            ),
+        )
+
+    tokens = _count_prompt_tokens(config)
+    if tokens is None:
+        budget = f"prompt budget unverified (tokenizer unavailable)"
+    elif tokens > _PROMPT_TOKEN_BUDGET:
+        return DoctorCheck(
+            name="vocabulary",
+            status="fail",
+            detail=(
+                f"{summary}; prompt is {tokens} tokens but faster-whisper "
+                f"truncates at {_PROMPT_TOKEN_BUDGET} -- terms are being dropped "
+                "silently. Move terms whose mis-transcription is not a real word "
+                "into vocabulary.corrections, which has no size limit."
+            ),
+        )
+    else:
+        budget = f"prompt {tokens}/{_PROMPT_TOKEN_BUDGET} tokens"
+
+    if len(terms) > _TERM_COUNT_ADVISORY:
+        return DoctorCheck(
+            name="vocabulary",
+            status="warn",
+            detail=(
+                f"{summary}; {budget}. Above ~{_TERM_COUNT_ADVISORY} terms the "
+                "prompt dilutes: every term weakens the bias on the others. "
+                "Prune terms you no longer say."
+            ),
+        )
+
+    return DoctorCheck(name="vocabulary", status="ok", detail=f"{summary}; {budget}")
+
+
+def _count_prompt_tokens(config: AppConfig) -> int | None:
+    """Token cost of the vocabulary prompt, or None if it cannot be measured."""
+    from vibemouse.core.transcriber import build_vocabulary_prompt
+
+    prompt = build_vocabulary_prompt(config.vocabulary_terms, config.language)
+    if not prompt:
+        return 0
+
+    try:
+        hub = importlib.import_module("huggingface_hub")
+        tokenizers = importlib.import_module("tokenizers")
+        model_dir = hub.snapshot_download(
+            _tokenizer_repo(config.model_name),
+            allow_patterns=["tokenizer.json"],
+            local_files_only=True,
+        )
+        tokenizer = tokenizers.Tokenizer.from_file(f"{model_dir}/tokenizer.json")
+    except Exception:
+        return None
+
+    return len(tokenizer.encode(" " + prompt.strip(), add_special_tokens=False).ids)
+
+
+def _tokenizer_repo(model_name: str) -> str:
+    from faster_whisper.utils import _MODELS
+
+    return _MODELS.get(model_name, f"Systran/faster-whisper-{model_name}")
 
 
 def _check_pynput() -> DoctorCheck:
