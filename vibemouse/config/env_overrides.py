@@ -35,6 +35,14 @@ def apply_env_overrides(
         "VIBEMOUSE_MERGE_LENGTH_S",
         _read_int(source, "VIBEMOUSE_MERGE_LENGTH_S", config.merge_length_s),
     )
+    max_recording_s = _require_non_negative(
+        "VIBEMOUSE_MAX_RECORDING_S",
+        _read_int(source, "VIBEMOUSE_MAX_RECORDING_S", config.max_recording_s),
+    )
+    whisper_beam_size = _require_positive(
+        "VIBEMOUSE_WHISPER_BEAM_SIZE",
+        _read_int(source, "VIBEMOUSE_WHISPER_BEAM_SIZE", config.whisper_beam_size),
+    )
     front_button = _read_button(source, "VIBEMOUSE_FRONT_BUTTON", config.front_button)
     rear_button = _read_button(source, "VIBEMOUSE_REAR_BUTTON", config.rear_button)
     if front_button == rear_button:
@@ -179,6 +187,13 @@ def apply_env_overrides(
             "VIBEMOUSE_FALLBACK_CPU",
             config.fallback_to_cpu,
         ),
+        max_recording_s=max_recording_s,
+        whisper_compute_type=source.get(
+            "VIBEMOUSE_WHISPER_COMPUTE_TYPE",
+            config.whisper_compute_type,
+        ).strip()
+        or config.whisper_compute_type,
+        whisper_beam_size=whisper_beam_size,
         button_debounce_ms=button_debounce_ms,
         gestures_enabled=_read_bool(
             source,

@@ -5,6 +5,12 @@ import unittest
 from unittest.mock import patch
 
 from vibemouse.config import load_config
+from vibemouse.config.env_overrides import apply_env_overrides
+from vibemouse.config.schema import (
+    build_default_config_document,
+    config_document_to_app_config,
+    normalize_config_document,
+)
 
 
 class LoadConfigTests(unittest.TestCase):
@@ -358,3 +364,158 @@ class LoadConfigTests(unittest.TestCase):
                 "VIBEMOUSE_FRONT_BUTTON and VIBEMOUSE_REAR_BUTTON must differ",
             ):
                 _ = load_config()
+
+
+class MaxRecordingConfigTests(unittest.TestCase):
+    @staticmethod
+    def _base_config():
+        return config_document_to_app_config(build_default_config_document())
+
+    def test_default_max_recording_s_is_60(self) -> None:
+        self.assertEqual(self._base_config().max_recording_s, 60)
+
+    def test_max_recording_s_env_override(self) -> None:
+        config = apply_env_overrides(
+            self._base_config(),
+            env={"VIBEMOUSE_MAX_RECORDING_S": "30"},
+        )
+        self.assertEqual(config.max_recording_s, 30)
+
+    def test_max_recording_s_zero_disables_limit(self) -> None:
+        config = apply_env_overrides(
+            self._base_config(),
+            env={"VIBEMOUSE_MAX_RECORDING_S": "0"},
+        )
+        self.assertEqual(config.max_recording_s, 0)
+
+    def test_negative_max_recording_s_is_rejected(self) -> None:
+        with self.assertRaisesRegex(
+            ValueError,
+            "VIBEMOUSE_MAX_RECORDING_S must be a non-negative integer",
+        ):
+            apply_env_overrides(
+                self._base_config(),
+                env={"VIBEMOUSE_MAX_RECORDING_S": "-1"},
+            )
+
+    def test_non_integer_max_recording_s_is_rejected(self) -> None:
+        with self.assertRaisesRegex(
+            ValueError,
+            "VIBEMOUSE_MAX_RECORDING_S must be an integer",
+        ):
+            apply_env_overrides(
+                self._base_config(),
+                env={"VIBEMOUSE_MAX_RECORDING_S": "abc"},
+            )
+
+    def test_normalize_rejects_negative_max_recording_s_in_document(self) -> None:
+        document = build_default_config_document()
+        transcriber = document["transcriber"]
+        assert isinstance(transcriber, dict)
+        transcriber["max_recording_s"] = -5
+        with self.assertRaisesRegex(
+            ValueError,
+            "transcriber.max_recording_s must be a non-negative integer",
+        ):
+            normalize_config_document(document)
+
+
+class VocabularyConfigTests(unittest.TestCase):
+    @staticmethod
+    def _base_config():
+        return config_document_to_app_config(build_default_config_document())
+
+    def test_vocabulary_defaults_to_empty(self) -> None:
+        config = self._base_config()
+        self.assertEqual(config.vocabulary_terms, ())
+        self.assertEqual(config.corrections, {})
+
+    def test_terms_and_corrections_are_loaded(self) -> None:
+        document = build_default_config_document()
+        document["vocabulary"] = {
+            "terms": ["prophage", "phage", "湿实验", "干实验"],
+            "corrections": {"施实验": "湿实验", "propage": "prophage"},
+        }
+        config = config_document_to_app_config(document)
+        self.assertEqual(
+            config.vocabulary_terms,
+            ("prophage", "phage", "湿实验", "干实验"),
+        )
+        self.assertEqual(
+            config.corrections,
+            {"施实验": "湿实验", "propage": "prophage"},
+        )
+
+    def test_duplicate_terms_are_collapsed_preserving_order(self) -> None:
+        document = build_default_config_document()
+        document["vocabulary"] = {"terms": ["phage", "prophage", "phage"]}
+        normalized = normalize_config_document(document)
+        vocabulary = normalized["vocabulary"]
+        assert isinstance(vocabulary, dict)
+        self.assertEqual(vocabulary["terms"], ["phage", "prophage"])
+
+    def test_blank_term_is_rejected(self) -> None:
+        document = build_default_config_document()
+        document["vocabulary"] = {"terms": ["phage", "  "]}
+        with self.assertRaisesRegex(ValueError, r"vocabulary.terms\[1\] must not be empty"):
+            normalize_config_document(document)
+
+    def test_non_list_terms_is_rejected(self) -> None:
+        document = build_default_config_document()
+        document["vocabulary"] = {"terms": "phage"}
+        with self.assertRaisesRegex(ValueError, "vocabulary.terms must be a list"):
+            normalize_config_document(document)
+
+    def test_correction_mapping_a_phrase_to_itself_is_rejected(self) -> None:
+        document = build_default_config_document()
+        document["vocabulary"] = {"corrections": {"phage": "phage"}}
+        with self.assertRaisesRegex(ValueError, "maps a phrase to itself"):
+            normalize_config_document(document)
+
+    def test_non_string_correction_value_is_rejected(self) -> None:
+        document = build_default_config_document()
+        document["vocabulary"] = {"corrections": {"phage": 3}}
+        with self.assertRaisesRegex(ValueError, "vocabulary.corrections"):
+            normalize_config_document(document)
+
+    def test_unknown_vocabulary_field_is_rejected(self) -> None:
+        document = build_default_config_document()
+        document["vocabulary"] = {"hotwords": ["phage"]}
+        with self.assertRaisesRegex(ValueError, "Unknown vocabulary field"):
+            normalize_config_document(document)
+
+    def test_whisper_defaults_and_env_overrides(self) -> None:
+        config = self._base_config()
+        self.assertEqual(config.whisper_compute_type, "float16")
+        self.assertEqual(config.whisper_beam_size, 5)
+
+        overridden = apply_env_overrides(
+            config,
+            env={
+                "VIBEMOUSE_WHISPER_COMPUTE_TYPE": "int8",
+                "VIBEMOUSE_WHISPER_BEAM_SIZE": "1",
+            },
+        )
+        self.assertEqual(overridden.whisper_compute_type, "int8")
+        self.assertEqual(overridden.whisper_beam_size, 1)
+
+    def test_env_overrides_preserve_vocabulary(self) -> None:
+        document = build_default_config_document()
+        document["vocabulary"] = {
+            "terms": ["phage"],
+            "corrections": {"非": "phage"},
+        }
+        config = config_document_to_app_config(document)
+        overridden = apply_env_overrides(config, env={"VIBEMOUSE_LANGUAGE": "zh"})
+        self.assertEqual(overridden.vocabulary_terms, ("phage",))
+        self.assertEqual(overridden.corrections, {"非": "phage"})
+
+    def test_non_positive_whisper_beam_size_is_rejected(self) -> None:
+        with self.assertRaisesRegex(
+            ValueError,
+            "VIBEMOUSE_WHISPER_BEAM_SIZE must be a positive integer",
+        ):
+            apply_env_overrides(
+                self._base_config(),
+                env={"VIBEMOUSE_WHISPER_BEAM_SIZE": "0"},
+            )

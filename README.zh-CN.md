@@ -192,6 +192,7 @@ tail -f ~/.local/state/vibemouse/service.log
 |---|---|---|
 | `VIBEMOUSE_ENTER_MODE` | `enter` | 后侧键提交模式（`enter`、`ctrl_enter`、`shift_enter`、`none`） |
 | `VIBEMOUSE_AUTO_PASTE` | `false` | 回退到剪贴板后是否自动粘贴 |
+| `VIBEMOUSE_MAX_RECORDING_S` | `60` | 单次录音时长上限（秒），超时自动停止并转录，避免误触后一直录音；`0` 关闭 |
 | `VIBEMOUSE_GESTURES_ENABLED` | `false` | 是否启用手势识别 |
 | `VIBEMOUSE_GESTURE_TRIGGER_BUTTON` | `rear` | 手势触发键（`front`、`rear`、`right`） |
 | `VIBEMOUSE_GESTURE_THRESHOLD_PX` | `120` | 手势识别阈值 |
@@ -199,8 +200,72 @@ tail -f ~/.local/state/vibemouse/service.log
 | `VIBEMOUSE_PREWARM_ON_START` | `true` | 启动预热，降低首次识别延迟 |
 | `VIBEMOUSE_PREWARM_DELAY_S` | `0.0` | 启动后延迟执行 ASR 预热，改善初始响应速度 |
 | `VIBEMOUSE_STATUS_FILE` | `$XDG_RUNTIME_DIR/vibemouse-status.json` | 运行状态文件（状态栏读取） |
+| `VIBEMOUSE_WHISPER_COMPUTE_TYPE` | `float16` | faster_whisper 的计算精度（GPU 用 `float16`，CPU 用 `int8`） |
+| `VIBEMOUSE_WHISPER_BEAM_SIZE` | `5` | faster_whisper 的 beam 宽度 |
 
-完整配置以 `vibemouse/config.py` 为准。
+完整配置以 `vibemouse/config/schema.py` 为准。
+
+## 词库（专业术语识别）
+
+默认的 SenseVoice 后端**不支持任何形式的热词偏置**（它是非自回归模型，没有文本条件输入），
+中文近音词和英文专业术语只能听天由命。词库功能因此分成两层，写在配置文件的
+`vocabulary` 段里：
+
+```json
+"vocabulary": {
+  "terms": ["prophage", "phage", "湿实验", "干实验"],
+  "corrections": {
+    "作施实验": "做湿实验",
+    "湿菌体": "噬菌体"
+  }
+}
+```
+
+| 层 | 字段 | 作用时机 | 适用后端 |
+|---|---|---|---|
+| 1. 解码偏置 | `terms` | 转写**过程中**，作为 prompt + hotwords 喂给解码器 | 仅 `faster_whisper` |
+| 2. 文本纠正 | `corrections` | 转写**完成后**，对成品文本做字面替换 | 所有后端 |
+
+两层互补：`terms` 把「随机音译碎片」拉成「近似正确」，`corrections` 把剩下的
+稳定近音错钉死。只用第二层也行（SenseVoice 后端就只有这层可用），但覆盖面差很多
+——它只能纠正你**事先知道**的固定错法。
+
+### corrections 的两个坑
+
+- **子串误伤**：`corrections` 是字面替换，不认词边界。写 `"施实验": "湿实验"` 会把
+  「实**施实验**方案」变成「实湿实验方案」。**宁可写长一点**（`"作施实验"`、`"做施实验"`），
+  也不要写一个会嵌进正常词里的短串。
+- **不会连锁**：替换结果不会被其它规则再次改写。`{"低度": "滴度", "滴度": "titer"}`
+  会把「低度」变成「滴度」并就此打住，不会继续变成 `titer`。同一个位置上**最长的**
+  key 优先匹配。
+
+### 启用 faster_whisper 后端（需要 NVIDIA GPU）
+
+第一层偏置需要一个能接受文本条件的解码器，所以要换后端：
+
+```powershell
+pip install -e ".[whisper]"
+```
+
+然后改配置：
+
+```json
+"transcriber": {
+  "backend": "faster_whisper",
+  "model_name": "large-v3",
+  "device": "cuda",
+  "language": "zh",
+  "whisper_compute_type": "float16"
+}
+```
+
+`model_name` 必须是 Whisper 模型名（`large-v3`、`large-v3-turbo`、`medium`……）或本地
+CTranslate2 模型目录；沿用 `iic/` 开头的 SenseVoice 模型 id 会直接报错而不是静默出错。
+GPU 加载失败时，若 `fallback_to_cpu` 为 `true` 会自动降级到 CPU（并把 `float16` 换成 `int8`）。
+
+Windows 上 CTranslate2 通过裸 `LoadLibrary` 加载 cuBLAS/cuDNN，认 `PATH` 而不认
+`os.add_dll_directory()`；后端在导入前会自动把 `site-packages/nvidia/*/bin` 注入 `PATH`，
+所以 pip 装的 `nvidia-cublas-cu12` / `nvidia-cudnn-cu12` 开箱可用，无需手动配环境变量。
 
 ## 故障排查（短版）
 

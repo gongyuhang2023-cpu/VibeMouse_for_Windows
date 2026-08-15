@@ -538,3 +538,123 @@ class VoiceMouseAppLoggingTests(unittest.TestCase):
         self.assertTrue(
             any("Transcription failed" in entry for entry in captured.output)
         )
+
+
+class VoiceMouseAppAutoStopTests(unittest.TestCase):
+    @staticmethod
+    def _make_subject() -> VoiceMouseApp:
+        return object.__new__(VoiceMouseApp)
+
+    def test_start_auto_stop_timer_schedules_with_configured_timeout(self) -> None:
+        subject = self._make_subject()
+        setattr(subject, "_config", SimpleNamespace(max_recording_s=60))
+        setattr(subject, "_timer_lock", threading.Lock())
+        setattr(subject, "_auto_stop_timer", None)
+
+        with patch("vibemouse.core.app.threading.Timer") as timer_cls:
+            start_timer = cast(
+                Callable[[], None], getattr(subject, "_start_auto_stop_timer")
+            )
+            start_timer()
+
+        timer_cls.assert_called_once()
+        call_args = timer_cls.call_args.args
+        self.assertEqual(call_args[0], 60)
+        self.assertIs(getattr(call_args[1], "__self__", None), subject)
+        self.assertIs(
+            getattr(call_args[1], "__func__", None),
+            getattr(VoiceMouseApp, "_on_auto_stop_timeout"),
+        )
+        self.assertTrue(timer_cls.return_value.daemon)
+        timer_cls.return_value.start.assert_called_once_with()
+        self.assertIs(getattr(subject, "_auto_stop_timer"), timer_cls.return_value)
+
+    def test_start_auto_stop_timer_disabled_when_zero(self) -> None:
+        subject = self._make_subject()
+        setattr(subject, "_config", SimpleNamespace(max_recording_s=0))
+        setattr(subject, "_timer_lock", threading.Lock())
+        setattr(subject, "_auto_stop_timer", None)
+
+        with patch("vibemouse.core.app.threading.Timer") as timer_cls:
+            start_timer = cast(
+                Callable[[], None], getattr(subject, "_start_auto_stop_timer")
+            )
+            start_timer()
+
+        timer_cls.assert_not_called()
+        self.assertIsNone(getattr(subject, "_auto_stop_timer"))
+
+    def test_stop_recording_cancels_auto_stop_timer(self) -> None:
+        subject = self._make_subject()
+        recording = SimpleNamespace(duration_s=1.0, path=Path("/tmp/rec.wav"))
+        setattr(subject, "_recorder", SimpleNamespace(stop_and_save=lambda: recording))
+        setattr(subject, "_set_recording_status", lambda value: None)
+        cancel_calls: list[bool] = []
+        setattr(subject, "_cancel_auto_stop_timer", lambda: cancel_calls.append(True))
+
+        stop_recording = cast(
+            Callable[[], object], getattr(subject, "_stop_recording")
+        )
+        result = stop_recording()
+
+        self.assertEqual(cancel_calls, [True])
+        self.assertIs(result, recording)
+
+    def test_auto_stop_timeout_stops_and_transcribes_when_recording(self) -> None:
+        subject = self._make_subject()
+        recording = SimpleNamespace(duration_s=60.0, path=Path("/tmp/rec.wav"))
+        setattr(subject, "_recorder", SimpleNamespace(is_recording=True))
+        setattr(subject, "_timer_lock", threading.Lock())
+        setattr(subject, "_auto_stop_timer", None)
+        setattr(subject, "_config", SimpleNamespace(max_recording_s=60))
+        setattr(subject, "_stop_recording", lambda: recording)
+        worker_calls: list[object] = []
+        setattr(
+            subject, "_start_transcription_worker", lambda rec: worker_calls.append(rec)
+        )
+
+        on_timeout = cast(
+            Callable[[], None], getattr(subject, "_on_auto_stop_timeout")
+        )
+        on_timeout()
+
+        self.assertEqual(worker_calls, [recording])
+
+    def test_auto_stop_timeout_noop_when_not_recording(self) -> None:
+        subject = self._make_subject()
+        setattr(subject, "_recorder", SimpleNamespace(is_recording=False))
+        setattr(subject, "_timer_lock", threading.Lock())
+        setattr(subject, "_auto_stop_timer", None)
+        stop_calls: list[bool] = []
+        worker_calls: list[object] = []
+        setattr(subject, "_stop_recording", lambda: stop_calls.append(True))
+        setattr(
+            subject, "_start_transcription_worker", lambda rec: worker_calls.append(rec)
+        )
+
+        on_timeout = cast(
+            Callable[[], None], getattr(subject, "_on_auto_stop_timeout")
+        )
+        on_timeout()
+
+        self.assertEqual(stop_calls, [])
+        self.assertEqual(worker_calls, [])
+
+    def test_auto_stop_timeout_skips_worker_when_recording_empty(self) -> None:
+        subject = self._make_subject()
+        setattr(subject, "_recorder", SimpleNamespace(is_recording=True))
+        setattr(subject, "_timer_lock", threading.Lock())
+        setattr(subject, "_auto_stop_timer", None)
+        setattr(subject, "_config", SimpleNamespace(max_recording_s=60))
+        setattr(subject, "_stop_recording", lambda: None)
+        worker_calls: list[object] = []
+        setattr(
+            subject, "_start_transcription_worker", lambda rec: worker_calls.append(rec)
+        )
+
+        on_timeout = cast(
+            Callable[[], None], getattr(subject, "_on_auto_stop_timeout")
+        )
+        on_timeout()
+
+        self.assertEqual(worker_calls, [])

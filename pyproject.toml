@@ -46,6 +46,15 @@ pt = [
 npu = [
   "openvino>=2026.0.0",
 ]
+# Optional faster_whisper backend. ctranslate2>=4.6 is the first release built
+# against CUDA 12.8, which is what Blackwell (RTX 50xx, sm_120) needs; the nvidia-*
+# wheels supply the cuBLAS/cuDNN DLLs that CTranslate2 loads at runtime on Windows.
+whisper = [
+  "faster-whisper>=1.1.0",
+  "ctranslate2>=4.6.0",
+  "nvidia-cublas-cu12>=12.8; sys_platform == 'win32'",
+  "nvidia-cudnn-cu12>=9.0; sys_platform == 'win32'",
+]
 
 [project.scripts]
 vibemouse = "vibemouse.cli.main:main"

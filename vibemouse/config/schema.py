@@ -45,6 +45,11 @@ class AppConfig:
     merge_vad: bool
     merge_length_s: int
     fallback_to_cpu: bool
+    max_recording_s: int
+    whisper_compute_type: str
+    whisper_beam_size: int
+    vocabulary_terms: tuple[str, ...]
+    corrections: dict[str, str]
     button_debounce_ms: int
     gestures_enabled: bool
     gesture_trigger_button: str
@@ -110,7 +115,14 @@ def build_default_config_document() -> dict[str, object]:
             "merge_vad": True,
             "merge_length_s": 15,
             "fallback_to_cpu": True,
+            "max_recording_s": 60,
+            "whisper_compute_type": "float16",
+            "whisper_beam_size": 5,
             "trust_remote_code": False,
+        },
+        "vocabulary": {
+            "terms": [],
+            "corrections": {},
         },
         "input": {
             "front_button": "x2",
@@ -150,6 +162,7 @@ def config_document_to_app_config(document: Mapping[str, object]) -> AppConfig:
     normalized = normalize_config_document(document)
     bindings = _expect_mapping(normalized, "bindings")
     transcriber = _expect_mapping(normalized, "transcriber")
+    vocabulary = _expect_mapping(normalized, "vocabulary")
     input_section = _expect_mapping(normalized, "input")
     output = _expect_mapping(normalized, "output")
     startup = _expect_mapping(normalized, "startup")
@@ -172,6 +185,16 @@ def config_document_to_app_config(document: Mapping[str, object]) -> AppConfig:
         merge_vad=bool(transcriber["merge_vad"]),
         merge_length_s=int(transcriber["merge_length_s"]),
         fallback_to_cpu=bool(transcriber["fallback_to_cpu"]),
+        max_recording_s=int(transcriber["max_recording_s"]),
+        whisper_compute_type=str(transcriber["whisper_compute_type"]),
+        whisper_beam_size=int(transcriber["whisper_beam_size"]),
+        vocabulary_terms=tuple(
+            str(term) for term in _expect_list(vocabulary, "terms")
+        ),
+        corrections={
+            str(key): str(value)
+            for key, value in _expect_mapping(vocabulary, "corrections").items()
+        },
         button_debounce_ms=int(input_section["button_debounce_ms"]),
         gestures_enabled=bool(input_section["gestures_enabled"]),
         gesture_trigger_button=str(input_section["gesture_trigger_button"]),
@@ -208,6 +231,7 @@ def normalize_config_document(document: Mapping[str, object]) -> dict[str, objec
         "schema_version",
         "bindings",
         "transcriber",
+        "vocabulary",
         "input",
         "output",
         "startup",
@@ -234,6 +258,9 @@ def normalize_config_document(document: Mapping[str, object]) -> dict[str, objec
     normalized["bindings"] = _normalize_bindings(document.get("bindings", {}))
     normalized["transcriber"] = _normalize_transcriber_section(
         _merge_section(defaults, document, "transcriber")
+    )
+    normalized["vocabulary"] = _normalize_vocabulary_section(
+        _merge_section(defaults, document, "vocabulary")
     )
     normalized["input"] = _normalize_input_section(
         _merge_section(defaults, document, "input")
@@ -386,10 +413,45 @@ def _normalize_transcriber_section(section: Mapping[str, object]) -> dict[str, o
         "fallback_to_cpu": _coerce_bool(
             section["fallback_to_cpu"], "transcriber.fallback_to_cpu"
         ),
+        "max_recording_s": _coerce_non_negative_int(
+            section["max_recording_s"], "transcriber.max_recording_s"
+        ),
+        "whisper_compute_type": _coerce_non_empty_string(
+            section["whisper_compute_type"], "transcriber.whisper_compute_type"
+        ),
+        "whisper_beam_size": _coerce_positive_int(
+            section["whisper_beam_size"], "transcriber.whisper_beam_size"
+        ),
         "trust_remote_code": _coerce_bool(
             section["trust_remote_code"], "transcriber.trust_remote_code"
         ),
     }
+
+
+def _normalize_vocabulary_section(section: Mapping[str, object]) -> dict[str, object]:
+    raw_terms = section["terms"]
+    if not isinstance(raw_terms, list | tuple):
+        raise ValueError("vocabulary.terms must be a list of strings")
+    terms: list[str] = []
+    for index, raw_term in enumerate(raw_terms):
+        term = _coerce_non_empty_string(raw_term, f"vocabulary.terms[{index}]")
+        if term not in terms:
+            terms.append(term)
+
+    raw_corrections = _expect_mapping_value(
+        section["corrections"], "vocabulary.corrections"
+    )
+    corrections: dict[str, str] = {}
+    for raw_key, raw_value in raw_corrections.items():
+        key = _coerce_non_empty_string(raw_key, "vocabulary.corrections key")
+        value = _coerce_string(raw_value, f"vocabulary.corrections[{key!r}]")
+        if key == value:
+            raise ValueError(
+                f"vocabulary.corrections[{key!r}] maps a phrase to itself; remove it"
+            )
+        corrections[key] = value
+
+    return {"terms": terms, "corrections": corrections}
 
 
 def _normalize_input_section(section: Mapping[str, object]) -> dict[str, object]:

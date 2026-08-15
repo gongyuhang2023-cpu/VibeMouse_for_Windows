@@ -168,15 +168,39 @@ python test_buttons.py
 | `VIBEMOUSE_DEVICE` | `cpu` | 推理设备（`cpu` 或 `cuda:0`） |
 | `VIBEMOUSE_ENTER_MODE` | `enter` | 后侧键模式（`enter`/`ctrl_enter`/`shift_enter`/`none`） |
 | `VIBEMOUSE_AUTO_PASTE` | `true` | 识别后自动粘贴 |
+| `VIBEMOUSE_MAX_RECORDING_S` | `60` | 单次录音时长上限（秒），超时自动停止并转录，避免误触后一直录音；`0` 关闭 |
 | `VIBEMOUSE_PREWARM_ON_START` | `true` | 启动时预加载模型（减少首次识别延迟） |
 | `VIBEMOUSE_FRONT_BUTTON` | `x2` | 前侧键映射 |
 | `VIBEMOUSE_REAR_BUTTON` | `x1` | 后侧键映射 |
+
+## 词库（专业术语识别）
+
+专业名词、中英混说的术语容易被听错。配置文件里的 `vocabulary` 段提供两层修正：
+
+```json
+"vocabulary": {
+  "terms": ["prophage", "phage", "湿实验", "干实验"],
+  "corrections": { "湿菌体": "噬菌体" }
+}
+```
+
+- `terms` —— 转写**过程中**偏置解码器（prompt + hotwords）。**仅 `faster_whisper` 后端有效**，
+  SenseVoice 架构上不支持热词。
+- `corrections` —— 转写**完成后**做字面替换，所有后端都生效。注意它不认词边界，
+  短 key 会误伤正常词（`"施实验"` 会命中「实**施实验**方案」），尽量写长。
+
+要用上第一层需装可选后端并换模型：`pip install -e ".[whisper]"`，再把 `transcriber.backend`
+改成 `faster_whisper`、`model_name` 改成 `large-v3`。详见
+[README.zh-CN.md 的词库章节](README.zh-CN.md#词库专业术语识别)。
 
 ## 资源占用
 
 - 内存：约 **660 MB**（主要是 SenseVoice 模型常驻）
 - CPU：空闲时几乎为零，仅在语音识别时短暂占用
 - 磁盘：模型约 230MB
+
+换用 `faster_whisper` + `large-v3` 后：显存约 3GB，磁盘约 3GB，
+延迟约 0.6 秒/句（RTX 5070 实测），换来的是专业术语识别准确率的显著提升。
 
 ## 常见问题
 

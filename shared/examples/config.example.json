@@ -10,6 +10,12 @@
     "model_name": "iic/SenseVoiceSmall",
     "language": "auto"
   },
+  "vocabulary": {
+    "terms": ["prophage", "phage"],
+    "corrections": {
+      "湿菌体": "噬菌体"
+    }
+  },
   "input": {
     "front_button": "x1",
     "rear_button": "x2",

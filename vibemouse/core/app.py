@@ -19,7 +19,7 @@ from vibemouse.core.commands import (
 )
 from vibemouse.config import AppConfig, write_status
 from vibemouse.core.output import TextOutput
-from vibemouse.core.transcriber import SenseVoiceTranscriber
+from vibemouse.core.transcriber import Transcriber
 from vibemouse.listener.keyboard_listener import KeyboardHotkeyListener
 from vibemouse.listener.mouse_listener import SideButtonListener
 from vibemouse.platform.system_integration import (
@@ -44,7 +44,7 @@ class VoiceMouseApp:
             dtype=config.dtype,
             temp_dir=config.temp_dir,
         )
-        self._transcriber: SenseVoiceTranscriber = SenseVoiceTranscriber(config)
+        self._transcriber: Transcriber = Transcriber(config)
         self._output: TextOutput = TextOutput()
         self._binding_resolver: BindingResolver = BindingResolver.from_config(config)
         self._listener: SideButtonListener = SideButtonListener(
@@ -70,6 +70,8 @@ class VoiceMouseApp:
         self._workers_lock: threading.Lock = threading.Lock()
         self._workers: set[threading.Thread] = set()
         self._prewarm_started: bool = False
+        self._timer_lock: threading.Lock = threading.Lock()
+        self._auto_stop_timer: threading.Timer | None = None
 
     def run(self) -> None:
         self._listener.start()
@@ -81,7 +83,8 @@ class VoiceMouseApp:
             + f"backend={self._config.transcriber_backend}, auto_paste={self._config.auto_paste}, "
             + f"enter_mode={self._config.enter_mode}, debounce_ms={self._config.button_debounce_ms}, "
             + f"front_button={self._config.front_button}, rear_button={self._config.rear_button}, "
-            + f"prewarm_on_start={self._config.prewarm_on_start}. "
+            + f"prewarm_on_start={self._config.prewarm_on_start}, "
+            + f"max_recording_s={self._config.max_recording_s}. "
             + "Press side-front to start/stop recording. Side-rear sends Enter."
         )
         self._maybe_prewarm_transcriber()
@@ -95,6 +98,7 @@ class VoiceMouseApp:
     def shutdown(self) -> None:
         self._listener.stop()
         self._keyboard_listener.stop()
+        self._cancel_auto_stop_timer()
         self._recorder.cancel()
         self._set_recording_status(False)
         with self._workers_lock:
@@ -148,6 +152,7 @@ class VoiceMouseApp:
             try:
                 self._recorder.start()
                 self._set_recording_status(True)
+                self._start_auto_stop_timer()
                 _LOG.info("Recording started")
             except Exception as error:
                 self._set_recording_status(False)
@@ -205,6 +210,7 @@ class VoiceMouseApp:
         self._execute_command(command_name, source_event=event_name)
 
     def _stop_recording(self) -> AudioRecording | None:
+        self._cancel_auto_stop_timer()
         try:
             recording = self._recorder.stop_and_save()
         except Exception as error:
@@ -216,6 +222,45 @@ class VoiceMouseApp:
             _LOG.info("Recording was empty and has been discarded")
             return None
         return recording
+
+    def _start_auto_stop_timer(self) -> None:
+        timeout_s = self._config.max_recording_s
+        if timeout_s <= 0:
+            return
+        timer = threading.Timer(timeout_s, self._on_auto_stop_timeout)
+        timer.daemon = True
+        with self._timer_lock:
+            self._cancel_auto_stop_timer_locked()
+            self._auto_stop_timer = timer
+        timer.start()
+
+    def _cancel_auto_stop_timer(self) -> None:
+        with self._timer_lock:
+            self._cancel_auto_stop_timer_locked()
+
+    def _cancel_auto_stop_timer_locked(self) -> None:
+        timer = self._auto_stop_timer
+        self._auto_stop_timer = None
+        if timer is not None:
+            timer.cancel()
+
+    def _on_auto_stop_timeout(self) -> None:
+        with self._timer_lock:
+            self._auto_stop_timer = None
+        if not self._recorder.is_recording:
+            return
+        _LOG.warning(
+            "Recording reached the %ss safety limit; stopping and transcribing "
+            "automatically",
+            self._config.max_recording_s,
+        )
+        try:
+            recording = self._stop_recording()
+        except Exception as error:
+            _LOG.exception("Failed to auto-stop recording after timeout: %s", error)
+            return
+        if recording is not None:
+            self._start_transcription_worker(recording)
 
     def _start_transcription_worker(self, recording: AudioRecording) -> None:
         worker = threading.Thread(
