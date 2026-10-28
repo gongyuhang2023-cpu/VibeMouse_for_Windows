@@ -6,8 +6,9 @@
     "hotkey.record_toggle": "toggle_recording"
   },
   "transcriber": {
-    "backend": "funasr_onnx",
-    "model_name": "iic/SenseVoiceSmall",
+    "backend": "faster_whisper",
+    "model_name": "medium",
+    "device": "cuda",
     "language": "auto"
   },
   "vocabulary": {

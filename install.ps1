@@ -4,10 +4,10 @@
 #  用法（在 PowerShell 或 cmd 中任选一种）:
 #
 #  PowerShell:
-#    irm https://raw.githubusercontent.com/gongyuhang2023-cpu/VibeMouse_for_Windows/main/install.ps1 | iex
+#    irm https://raw.githubusercontent.com/gongyuhang2023-cpu/VibeMouse_for_Windows/master/install.ps1 | iex
 #
 #  CMD:
-#    powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/gongyuhang2023-cpu/VibeMouse_for_Windows/main/install.ps1 | iex"
+#    powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/gongyuhang2023-cpu/VibeMouse_for_Windows/master/install.ps1 | iex"
 #
 #  全自动完成:
 #    1. 下载项目（无需 git）
@@ -159,6 +159,11 @@ Pip-Install "core deps"       @("sounddevice", "soundfile", "pynput", "pyperclip
 Pip-Install "librosa"         @("librosa")
 Pip-Install "funasr-onnx"     @("funasr-onnx")
 Pip-Install "PyTorch CPU"     @("torch", "--index-url", "https://download.pytorch.org/whl/cpu")
+# Default backend; keep in sync with the [whisper] extra in pyproject.toml.
+# numpy is pinned again so this resolve cannot pull in numpy 2.x.
+Pip-Install "faster-whisper + NVIDIA runtime (~1GB)" @("numpy==1.26.4", "faster-whisper>=1.1.0",
+                                 "ctranslate2>=4.6.0", "nvidia-cublas-cu12>=12.8",
+                                 "nvidia-cudnn-cu12>=9.0")
 Pip-Install "VibeMouse"       @("-e", $INSTALL_DIR, "--no-deps")
 
 Write-Ok "All dependencies installed"
@@ -168,6 +173,12 @@ Write-Ok "All dependencies installed"
 # ============================================================
 Write-Step 5 $totalSteps "Download speech recognition model ..."
 
+# faster-whisper medium is the default model (from Hugging Face).
+Write-Host "       Downloading faster-whisper medium model (~1.5GB) ..."
+& $PYTHON -c "from faster_whisper.utils import download_model; download_model('medium')"
+if ($LASTEXITCODE -ne 0) { Write-Warn "Whisper model download failed, VibeMouse will retry on first start" }
+
+# SenseVoice, only used if transcriber.backend is switched to funasr_onnx
 $onnxDir   = "$env:USERPROFILE\.cache\modelscope\hub\models\iic\SenseVoiceSmall-onnx"
 $origDir   = "$env:USERPROFILE\.cache\modelscope\hub\models\iic\SenseVoiceSmall"
 $tokenizer = "chn_jpn_yue_eng_ko_spectok.bpe.model"

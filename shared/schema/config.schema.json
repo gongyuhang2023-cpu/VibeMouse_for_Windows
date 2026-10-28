@@ -57,17 +57,17 @@
           "type": "string",
           "minLength": 1,
           "enum": ["funasr_onnx", "faster_whisper"],
-          "default": "funasr_onnx"
+          "default": "faster_whisper"
         },
         "model_name": {
           "type": "string",
           "minLength": 1,
-          "default": "iic/SenseVoiceSmall"
+          "default": "medium"
         },
         "device": {
           "type": "string",
           "minLength": 1,
-          "default": "cpu"
+          "default": "cuda"
         },
         "language": {
           "type": "string",
@@ -103,7 +103,7 @@
         "whisper_compute_type": {
           "type": "string",
           "minLength": 1,
-          "default": "float16",
+          "default": "int8_float16",
           "description": "CTranslate2 compute type for the faster_whisper backend, e.g. float16 (GPU) or int8 (CPU)."
         },
         "whisper_beam_size": {

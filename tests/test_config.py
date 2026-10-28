@@ -19,7 +19,7 @@ class LoadConfigTests(unittest.TestCase):
             config = load_config()
 
         self.assertFalse(config.trust_remote_code)
-        self.assertEqual(config.transcriber_backend, "funasr_onnx")
+        self.assertEqual(config.transcriber_backend, "faster_whisper")
         self.assertFalse(config.auto_paste)
         self.assertFalse(config.gestures_enabled)
         self.assertEqual(config.gesture_trigger_button, "rear")
@@ -486,7 +486,7 @@ class VocabularyConfigTests(unittest.TestCase):
 
     def test_whisper_defaults_and_env_overrides(self) -> None:
         config = self._base_config()
-        self.assertEqual(config.whisper_compute_type, "float16")
+        self.assertEqual(config.whisper_compute_type, "int8_float16")
         self.assertEqual(config.whisper_beam_size, 5)
 
         overridden = apply_env_overrides(

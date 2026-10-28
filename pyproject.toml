@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "vibemouse"
 version = "1.0.0"
-description = "Mouse side-button voice input for Windows with SenseVoice (local ASR)"
+description = "Mouse side-button voice input for Windows with faster-whisper (local ASR)"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }

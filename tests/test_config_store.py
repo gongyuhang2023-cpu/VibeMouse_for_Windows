@@ -16,7 +16,7 @@ class ConfigStoreTests(unittest.TestCase):
             config = load_config(config_path, env={})
 
         self.assertEqual(config.sample_rate, 16000)
-        self.assertEqual(config.transcriber_backend, "funasr_onnx")
+        self.assertEqual(config.transcriber_backend, "faster_whisper")
         self.assertEqual(config.log_level, "INFO")
         self.assertEqual(config.front_button, "x1")
         self.assertEqual(config.rear_button, "x2")

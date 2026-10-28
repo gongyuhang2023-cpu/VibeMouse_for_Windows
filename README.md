@@ -8,8 +8,9 @@
 
 - **按鼠标前侧键**开始录音，再按一次停止 → 语音自动转文字并粘贴到光标处
 - **按鼠标后侧键**发送 Enter
-- **5 种语言自动识别**：中文、English、粤语、日本語、한국어，无需手动切换
-- **完全离线**：语音识别模型（SenseVoice）在本地运行，不需要网络，隐私安全
+- **多语言自动识别**：中文、English、Deutsch、日本語等，无需手动切换
+- **本地识别**：语音识别模型（[faster-whisper](https://github.com/SYSTRAN/faster-whisper) `medium`）在本机运行，模型下载后不需要网络，隐私安全
+- **NVIDIA 显卡加速**：RTX 5070 上一句话 1 秒内出字；没有 N 卡会自动改用 CPU，能用但每句要等几秒（见[资源占用](#资源占用)）
 - 任何能输入文字的地方都能用 — 记事本、浏览器、微信、IDE、终端等
 
 ## 安装
@@ -31,7 +32,7 @@ powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/gon
 
 </details>
 
-脚本全自动完成：下载项目 → 安装 Miniconda → 创建 Python 3.11 环境 → 安装依赖 → 下载模型 → 自检 → 可选开机自启。
+脚本全自动完成：下载项目 → 安装 Miniconda → 创建 Python 3.11 环境 → 安装依赖 → 下载模型 → 自检 → 可选开机自启。首次安装需下载约 4GB（主要是识别模型和显卡运行库）。
 
 > **⚠️ Python 版本说明**：本项目需要 **Python 3.10 ~ 3.12**。Python 3.13+ 因 numpy ABI 不兼容会导致模型加载崩溃（segfault）。一键安装脚本已自动使用 Python 3.11，无需手动处理。
 
@@ -45,6 +46,7 @@ powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/gon
 - Windows 10/11
 - **Python 3.10 ~ 3.12**（推荐用 [Miniconda](https://docs.conda.io/en/latest/miniconda.html) 管理）
 - 带侧键的鼠标
+- 推荐 NVIDIA 显卡（没有也能用，识别较慢）
 
 > ⚠️ **不要使用 Python 3.13+**：`funasr-onnx` 的 C 扩展按 numpy 1.x ABI 编译，Python 3.13 上 numpy 1.x 无预编译 wheel，pip 会安装 numpy 2.x，导致模型加载时 segfault。
 
@@ -81,11 +83,22 @@ pip install funasr-onnx
 # PyTorch（CPU 版本，约 115MB）
 pip install torch --index-url https://download.pytorch.org/whl/cpu
 
+# faster-whisper（默认识别引擎）+ NVIDIA 显卡运行库（约 1GB）
+pip install "numpy==1.26.4" "faster-whisper>=1.1.0" "ctranslate2>=4.6.0" "nvidia-cublas-cu12>=12.8" "nvidia-cudnn-cu12>=9.0"
+
 # 安装项目本体
 pip install -e . --no-deps
 ```
 
 #### 5. 下载语音识别模型
+
+首次启动会从 Hugging Face 自动下载 faster-whisper `medium` 模型（约 1.5GB），也可以提前下载：
+
+```bash
+python -c "from faster_whisper.utils import download_model; download_model('medium')"
+```
+
+下载失败见[常见问题](#模型下载失败)。以下仅在改用 SenseVoice 后端时需要：
 
 首次启动会从 ModelScope 自动下载 ONNX 模型（约 230MB）。
 
@@ -164,8 +177,8 @@ python test_buttons.py
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `VIBEMOUSE_LANGUAGE` | `auto` | 识别语言（`auto`/`zh`/`en`/`yue`/`ja`/`ko`） |
-| `VIBEMOUSE_DEVICE` | `cpu` | 推理设备（`cpu` 或 `cuda:0`） |
+| `VIBEMOUSE_LANGUAGE` | `auto` | 识别语言（`auto`/`zh`/`en`/`de`/`ja` 等） |
+| `VIBEMOUSE_DEVICE` | `cuda` | 推理设备（`cuda` 或 `cpu`；没有可用显卡时自动改用 CPU） |
 | `VIBEMOUSE_ENTER_MODE` | `enter` | 后侧键模式（`enter`/`ctrl_enter`/`shift_enter`/`none`） |
 | `VIBEMOUSE_AUTO_PASTE` | `true` | 识别后自动粘贴 |
 | `VIBEMOUSE_MAX_RECORDING_S` | `60` | 单次录音时长上限（秒），超时自动停止并转录，避免误触后一直录音；`0` 关闭 |
@@ -184,23 +197,29 @@ python test_buttons.py
 }
 ```
 
-- `terms` —— 转写**过程中**偏置解码器（prompt + hotwords）。**仅 `faster_whisper` 后端有效**，
+- `terms` —— 转写**过程中**偏置解码器（prompt + hotwords）。**仅 `faster_whisper` 后端（默认）有效**，
   SenseVoice 架构上不支持热词。
 - `corrections` —— 转写**完成后**做字面替换，所有后端都生效。注意它不认词边界，
   短 key 会误伤正常词（`"施实验"` 会命中「实**施实验**方案」），尽量写长。
 
-要用上第一层需装可选后端并换模型：`pip install -e ".[whisper]"`，再把 `transcriber.backend`
-改成 `faster_whisper`、`model_name` 改成 `large-v3`。详见
+默认后端就是 `faster_whisper`，两层都直接生效。想让专业术语更准，可以把 `model_name` 换成 `large-v3`
+（代价见[资源占用](#资源占用)）。详见
 [README.zh-CN.md 的词库章节](README.zh-CN.md#词库专业术语识别)。
 
 ## 资源占用
 
-- 内存：约 **660 MB**（主要是 SenseVoice 模型常驻）
-- CPU：空闲时几乎为零，仅在语音识别时短暂占用
-- 磁盘：模型约 230MB
+默认配置（faster-whisper `medium`）：
 
-换用 `faster_whisper` + `large-v3` 后：显存约 3GB，磁盘约 3GB，
-延迟约 0.6 秒/句（RTX 5070 实测），换来的是专业术语识别准确率的显著提升。
+- 显存：约 **1.1 GB**
+- 磁盘：模型约 1.5GB，另有显卡运行库约 1GB
+- 速度：3～6 秒的一句话，**0.3～0.9 秒**出字（RTX 5070 实测）
+- 没有 NVIDIA 显卡：自动改用 CPU，同样的句子要 **6～7 秒**（Intel Core Ultra 7 265K 实测）
+- CPU：空闲时几乎为零，仅在语音识别时短暂占用
+
+换成 `large-v3`：显存约 3GB，磁盘约 3GB，约 0.6 秒/句，专业术语识别更准。
+
+改用 SenseVoice（CPU 上快得多，但词库的 `terms` 对它无效）：把配置文件的 `transcriber` 段改成
+`"backend": "funasr_onnx", "model_name": "iic/SenseVoiceSmall", "device": "cpu"`。内存约 660 MB，磁盘约 230MB。
 
 ## 常见问题
 
@@ -216,15 +235,23 @@ python test_buttons.py
 
 确保目标窗口的输入框获得了焦点（光标在输入框里闪烁）。VibeMouse 通过剪贴板 + Ctrl+V 粘贴文本。
 
-### 内存占用过高
+### 模型下载失败
 
-660MB 是正常值（模型常驻）。如果不可接受，关闭预热：设置 `VIBEMOUSE_PREWARM_ON_START=false`，模型会在首次录音时才加载。
+识别模型从 Hugging Face 下载。国内网络访问不稳定时，先设置镜像，再重新运行安装或启动 VibeMouse：
+
+```cmd
+setx HF_ENDPOINT https://hf-mirror.com
+```
+
+### 内存/显存占用过高
+
+模型常驻内存和显存是正常的（默认约 1.1GB 显存）。如果不可接受，关闭预热：设置 `VIBEMOUSE_PREWARM_ON_START=false`，模型会在首次录音时才加载。
 
 ## 致谢
 
 - 原项目：[VibeMouse](https://github.com/vimalinx/VibeMouse)
-- 语音识别：[SenseVoice](https://github.com/FunAudioLLM/SenseVoice)（阿里达摩院）
-- 推理引擎：[FunASR ONNX](https://github.com/modelscope/FunASR)
+- 语音识别（默认）：[faster-whisper](https://github.com/SYSTRAN/faster-whisper)，基于 OpenAI [Whisper](https://github.com/openai/whisper)
+- 语音识别（可选）：[SenseVoice](https://github.com/FunAudioLLM/SenseVoice)（阿里达摩院），推理引擎 [FunASR ONNX](https://github.com/modelscope/FunASR)
 
 ## License
 

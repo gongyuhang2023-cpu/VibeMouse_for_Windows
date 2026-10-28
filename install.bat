@@ -151,7 +151,15 @@ if %ERRORLEVEL% neq 0 (
     goto :error_exit
 )
 
-echo       [4f] 安装 VibeMouse 本体 ...
+:: 默认识别引擎；版本要求与 pyproject.toml 的 [whisper] 一致，再锁一次 numpy 防止被升到 2.x
+echo       [4f] faster-whisper + NVIDIA 显卡运行库（约 1GB）...
+%PIP% install "numpy==1.26.4" "faster-whisper>=1.1.0" "ctranslate2>=4.6.0" "nvidia-cublas-cu12>=12.8" "nvidia-cudnn-cu12>=9.0" --quiet
+if %ERRORLEVEL% neq 0 (
+    echo [错误] faster-whisper 安装失败
+    goto :error_exit
+)
+
+echo       [4g] 安装 VibeMouse 本体 ...
 %PIP% install -e "%PROJECT_DIR%" --no-deps --quiet
 if %ERRORLEVEL% neq 0 (
     echo [错误] VibeMouse 安装失败
@@ -164,7 +172,16 @@ echo.
 :: ============================================================
 :: Step 5: 下载语音识别模型
 :: ============================================================
-echo [5/7] 下载语音识别模型（首次约 230MB + 900MB）...
+echo [5/7] 下载语音识别模型（首次约 1.5GB + 230MB + 900MB）...
+
+:: faster-whisper medium 是默认模型（从 Hugging Face 下载）
+echo       正在下载 faster-whisper medium 模型（约 1.5GB）...
+"%PYTHON%" -c "from faster_whisper.utils import download_model; download_model('medium')"
+if %ERRORLEVEL% neq 0 (
+    echo [警告] whisper 模型下载失败，首次运行时会自动重试
+)
+
+:: 以下是 SenseVoice 模型，仅在把 transcriber.backend 改成 funasr_onnx 时用到
 
 set "ONNX_DIR=%USERPROFILE%\.cache\modelscope\hub\models\iic\SenseVoiceSmall-onnx"
 set "ORIG_DIR=%USERPROFILE%\.cache\modelscope\hub\models\iic\SenseVoiceSmall"
