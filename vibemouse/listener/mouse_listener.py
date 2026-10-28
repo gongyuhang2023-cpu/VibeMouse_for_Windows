@@ -26,6 +26,10 @@ GestureCallback = Callable[[str], None]
 EventCallback = Callable[[str], None]
 _LOG = logging.getLogger(__name__)
 
+# Low-level mouse hook messages for the side (X) buttons.
+_WM_XBUTTONDOWN = 0x020B
+_WM_XBUTTONUP = 0x020C
+
 
 class SideButtonListener:
     def __init__(
@@ -391,10 +395,33 @@ class SideButtonListener:
                 return
             self._accumulate_gesture_position(x, y)
 
+        def win32_event_filter(msg: int, data: _Win32MouseHookData) -> bool:
+            # Swallow our side buttons system-wide so the app under the cursor
+            # never sees them (browsers would navigate back/forward). A
+            # suppressed event never reaches on_click, so dispatch it here.
+            if msg not in (_WM_XBUTTONDOWN, _WM_XBUTTONUP):
+                return True
+            btn_name = {1: "x1", 2: "x2"}.get(data.mouseData >> 16)
+            if btn_name == self._front_button:
+                button_label = "front"
+            elif btn_name == self._rear_button:
+                button_label = "rear"
+            else:
+                return True
+            if msg == _WM_XBUTTONDOWN:
+                self._dispatch_click_async(button_label)
+            listener.suppress_event()
+            return False
+
         # Only register on_move if gestures are enabled — otherwise it fires
         # for every mouse pixel movement and wastes CPU.
         move_handler = on_move if self._gestures_enabled else None
-        listener = listener_ctor(on_click=on_click, on_move=move_handler)
+        # pynput ignores win32_* options on other platforms.
+        listener = listener_ctor(
+            on_click=on_click,
+            on_move=move_handler,
+            win32_event_filter=win32_event_filter,
+        )
         _LOG.info("Mouse listener using pynput backend")
         listener.start()
         deadline: float | None = None
@@ -937,6 +964,12 @@ class _MouseListener(Protocol):
 
     def stop(self) -> None: ...
 
+    def suppress_event(self) -> None: ...
+
+
+class _Win32MouseHookData(Protocol):
+    mouseData: int
+
 
 class _MouseListenerCtor(Protocol):
     def __call__(
@@ -944,6 +977,7 @@ class _MouseListenerCtor(Protocol):
         *,
         on_click: Callable[[int, int, object, bool], None],
         on_move: Callable[[int, int], None] | None = None,
+        win32_event_filter: Callable[[int, _Win32MouseHookData], bool] | None = None,
     ) -> _MouseListener: ...
 
 

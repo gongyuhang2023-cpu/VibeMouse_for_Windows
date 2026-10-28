@@ -1170,6 +1170,71 @@ class SideButtonListenerGestureTests(unittest.TestCase):
         begin_suppress.assert_not_called()
         end_suppress.assert_not_called()
 
+    def test_pynput_win32_filter_swallows_side_buttons_and_dispatches_press(
+        self,
+    ) -> None:
+        class _Suppressed(Exception):
+            pass
+
+        class _FakeHookData:
+            def __init__(self, xbutton: int) -> None:
+                self.mouseData = xbutton << 16
+
+        captured: dict[str, object] = {}
+
+        class _FakePynputListener:
+            def __init__(self, **kwargs: object) -> None:
+                captured.update(kwargs)
+
+            def start(self) -> None:
+                return
+
+            def stop(self) -> None:
+                return
+
+            def suppress_event(self) -> None:
+                raise _Suppressed()
+
+        fake_module = type("_PynputMouse", (), {"Listener": _FakePynputListener})
+
+        def _import_module(name: str):
+            if name == "pynput.mouse":
+                return fake_module
+            return _real_import_module(name)
+
+        listener = SideButtonListener(
+            on_front_press=_noop_button,
+            on_rear_press=_noop_button,
+            front_button="x2",
+            rear_button="x1",
+        )
+        listener._stop.set()
+
+        with (
+            patch(
+                "vibemouse.mouse_listener.importlib.import_module",
+                side_effect=_import_module,
+            ),
+            patch.object(listener, "_dispatch_click_async") as dispatch,
+        ):
+            run_pynput = cast(Callable[[], None], getattr(listener, "_run_pynput"))
+            run_pynput()
+
+            event_filter = cast(
+                Callable[[int, object], bool], captured["win32_event_filter"]
+            )
+            # WM_XBUTTONDOWN / WM_XBUTTONUP for XBUTTON1 (rear) then XBUTTON2.
+            for msg, xbutton in ((0x020B, 1), (0x020C, 1), (0x020B, 2), (0x020C, 2)):
+                with self.assertRaises(_Suppressed):
+                    _ = event_filter(msg, _FakeHookData(xbutton))
+            # WM_LBUTTONDOWN passes through untouched.
+            self.assertTrue(event_filter(0x0201, _FakeHookData(0)))
+
+        self.assertEqual(
+            [call.args for call in dispatch.call_args_list],
+            [("rear",), ("front",)],
+        )
+
 
 class _GrabDeviceStub:
     def __init__(self, *, fail_ungrab_times: int = 0) -> None:
